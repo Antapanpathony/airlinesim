@@ -294,12 +294,11 @@ class WorldMap(tk.Canvas):
                 lbl_y = cy_ - r - 7
                 self.create_text(cx_, lbl_y, text=city.code,
                                   fill=GOLD if is_hub else (WHITE if is_hover else TEXT2),
-                                  font=(_SANS if '_SANS' in dir() else 'Helvetica',
-                                        font_size, 'bold' if is_hub else 'normal'),
+                                  font=(_SANS, font_size, 'bold' if is_hub else 'normal'),
                                   anchor='s', tags=('city_lbl', city.code))
 
         # Hub glow ring
-        if hub and hub in self.game_state.hub_code if self.game_state else False:
+        if hub and self.game_state and hub == self.game_state.hub_code:
             city = CITY_DICT.get(hub)
             if city:
                 cx_, cy_ = self._ll_to_canvas(city.lat, city.lon)
