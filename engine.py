@@ -316,6 +316,8 @@ class GameEngine:
         arrive_day = depart_day + flight_days
 
         demand = self._route_demand(route)
+        if not going:
+            demand = int(demand * 1.3)  # return flights draw more passengers toward the origin hub
         pax = min(ac.passengers, demand)
         load_factor = pax / max(1, ac.passengers)
         yield_adj = 0.8 + load_factor * 0.4
