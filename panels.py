@@ -173,9 +173,10 @@ class FleetPanel(tk.Frame):
         range_str = 'Suborbital' if ac.range_km <= 0 else f'{ac.range_km:,} km'
         status = '✅ Available' if avail else f'🔒 Available {ac.year}'
         cost_color = GREEN if affordable else RED
+        sep = '─' * 28
         details = (
             f'{cat_icon} {ac.name}\n'
-            f'{'─'*28}\n'
+            f'{sep}\n'
             f'🏭  {ac.manufacturer}\n'
             f'📅  {ac.year} · {status}\n\n'
             f'👥  {ac.passengers} passengers\n'
@@ -347,6 +348,30 @@ class RoutesPanel(tk.Frame):
         icon_btn(btn_row, '🗑  Close Route', self._close_route,
                  color='#5a1a1a', font=F_SMALL).pack(side='left', padx=2)
 
+        # Assigned planes sub-list
+        tk.Label(self, text='ASSIGNED AIRCRAFT', fg=GOLD, bg=BG2, font=F_SUBHEAD).pack(
+            anchor='w', padx=12, pady=(8, 2))
+
+        ac_frame = tk.Frame(self, bg=BG2)
+        ac_frame.pack(fill='x', padx=8, pady=(0, 8))
+
+        ac_cols = ('name', 'condition', 'hours', 'status')
+        self._ac_tree = ttk.Treeview(ac_frame, columns=ac_cols, show='headings',
+                                      selectmode='none', style='Treeview', height=5)
+        ac_hdrs = [('name', 'Aircraft', 200), ('condition', 'Cond.', 70),
+                   ('hours', 'Hours', 80), ('status', 'Status', 100)]
+        for col, hdr, w in ac_hdrs:
+            self._ac_tree.heading(col, text=hdr)
+            self._ac_tree.column(col, width=w, anchor='center')
+        self._ac_tree.column('name', anchor='w')
+
+        ac_sb = ttk.Scrollbar(ac_frame, orient='vertical', command=self._ac_tree.yview)
+        self._ac_tree.configure(yscrollcommand=ac_sb.set)
+        self._ac_tree.pack(side='left', fill='x', expand=True)
+        ac_sb.pack(side='right', fill='y')
+
+        self._tree.bind('<<TreeviewSelect>>', self._on_route_select)
+
         self.refresh()
 
     def set_city(self, city_code: str):
@@ -377,6 +402,32 @@ class RoutesPanel(tk.Frame):
         for iid in sel:
             if self._tree.exists(iid):
                 self._tree.selection_set(iid)
+        self._refresh_ac_list()
+
+    def _on_route_select(self, event):
+        self._refresh_ac_list()
+
+    def _refresh_ac_list(self):
+        for item in self._ac_tree.get_children():
+            self._ac_tree.delete(item)
+        sel = self._tree.selection()
+        if not sel:
+            return
+        route = self.state.get_route(sel[0])
+        if not route:
+            return
+        for serial in route.aircraft_ids:
+            owned = self.state.get_owned(serial)
+            if not owned:
+                continue
+            cond = f'{owned.condition * 100:.0f}%'
+            hours = f'{owned.hours_flown:,}h'
+            in_flight = any(f.serial == serial for f in self.state.active_flights)
+            status = '✈ In Flight' if in_flight else '🅿 At Gate'
+            tag = 'inflight' if in_flight else 'gate'
+            self._ac_tree.insert('', 'end', values=(owned.name, cond, hours, status), tags=(tag,))
+        self._ac_tree.tag_configure('inflight', foreground=ACCENT2)
+        self._ac_tree.tag_configure('gate', foreground=TEXT2)
 
     def _open_route(self):
         orig = self._orig_var.get().strip().upper()
