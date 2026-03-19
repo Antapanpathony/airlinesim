@@ -50,7 +50,20 @@ class FleetPanel(tk.Frame):
         icon_btn(btn_row, '💰  Sell Aircraft', self._sell_aircraft,
                  color='#5a1a1a', font=F_SMALL).pack(side='left', padx=2)
 
-        # Right: marketplace
+        # Detail card (packed first so it anchors to the far right)
+        self._detail = tk.Frame(self, bg=BG3, width=220)
+        self._detail.pack(side='right', fill='y', padx=(2,8), pady=8)
+        self._detail.pack_propagate(False)
+        self._detail_lbl = tk.Label(self._detail, text='Select an aircraft\nto view details',
+                                     fg=TEXT2, bg=BG3, font=F_SMALL, justify='left',
+                                     wraplength=200)
+        self._detail_lbl.pack(padx=10, pady=10, anchor='nw')
+        self._buy_btn = icon_btn(self._detail, '🛒  Purchase', self._buy_aircraft,
+                                  color=GREEN, font=F_SMALL)
+        self._buy_btn.pack(padx=10, pady=4, fill='x')
+        self._buy_btn.config(state='disabled')
+
+        # Right: marketplace (packed after detail, so it sits left of the detail card)
         right = tk.Frame(self, bg=BG2, width=420)
         right.pack(side='right', fill='both', padx=(2, 0))
         right.pack_propagate(False)
@@ -85,19 +98,6 @@ class FleetPanel(tk.Frame):
         self._market_tree.configure(yscrollcommand=sb2.set)
         self._market_tree.pack(side='left', fill='both', expand=True, padx=(8,0), pady=4)
         sb2.pack(side='left', fill='y', pady=4)
-
-        # Detail card
-        self._detail = tk.Frame(self, bg=BG3, width=220)
-        self._detail.pack(side='right', fill='y', padx=(2,8), pady=8)
-        self._detail.pack_propagate(False)
-        self._detail_lbl = tk.Label(self._detail, text='Select an aircraft\nto view details',
-                                     fg=TEXT2, bg=BG3, font=F_SMALL, justify='left',
-                                     wraplength=200)
-        self._detail_lbl.pack(padx=10, pady=10, anchor='nw')
-        self._buy_btn = icon_btn(self._detail, '🛒  Purchase', self._buy_aircraft,
-                                  color=GREEN, font=F_SMALL)
-        self._buy_btn.pack(padx=10, pady=4, fill='x')
-        self._buy_btn.config(state='disabled')
 
         self._selected_ac = None
         self.refresh()
