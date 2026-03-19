@@ -196,14 +196,61 @@ class FleetPanel(tk.Frame):
     def _buy_aircraft(self):
         if not self._selected_ac:
             return
-        ok, msg = self.engine.buy_aircraft(self._selected_ac)
-        if ok:
-            messagebox.showinfo('Purchase', msg, parent=self)
-            if self.refresh_cb:
-                self.refresh_cb()
-            self.refresh()
-        else:
-            messagebox.showerror('Cannot Purchase', msg, parent=self)
+        ac = self._selected_ac
+
+        dlg = tk.Toplevel(self)
+        dlg.title('Purchase Aircraft')
+        dlg.configure(bg=BG3)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        tk.Label(dlg, text=f'Purchase {ac.name}',
+                 fg=GOLD, bg=BG3, font=F_SUBHEAD).pack(padx=24, pady=(16, 4))
+        tk.Label(dlg, text='─' * 36, fg=BORDER, bg=BG3, font=F_SMALL).pack()
+
+        info = tk.Frame(dlg, bg=BG3)
+        info.pack(padx=24, pady=10)
+        cash_after = self.state.cash - ac.cost_m
+        rows = [
+            ('Purchase price',  money_str(ac.cost_m)),
+            ('Cash remaining',  money_str(cash_after)),
+            ('Monthly ops cost', money_str(ac.monthly_cost_k / 1000) + '/mo'),
+            ('Seats',           f'{ac.passengers} passengers'),
+            ('Range',           f'{ac.range_km:,} km'),
+            ('Speed',           (f'Mach {ac.speed_kmh/1225:.1f}'
+                                 if ac.speed_kmh > 1200
+                                 else f'{ac.speed_kmh} km/h')),
+        ]
+        for i, (label, val) in enumerate(rows):
+            tk.Label(info, text=label + ':', fg=TEXT2, bg=BG3,
+                     font=F_SMALL, anchor='e', width=16).grid(
+                         row=i, column=0, sticky='e', pady=3, padx=(0, 10))
+            color = RED if label == 'Cash remaining' and cash_after < 0 else TEXT
+            tk.Label(info, text=val, fg=color, bg=BG3,
+                     font=F_SMALL, anchor='w').grid(row=i, column=1, sticky='w', pady=3)
+
+        btns = tk.Frame(dlg, bg=BG3)
+        btns.pack(padx=24, pady=(4, 20))
+
+        def do_buy():
+            dlg.destroy()
+            ok, msg = self.engine.buy_aircraft(ac)
+            if ok:
+                messagebox.showinfo('Purchase Complete', msg, parent=self)
+                if self.refresh_cb:
+                    self.refresh_cb()
+                self.refresh()
+            else:
+                messagebox.showerror('Cannot Purchase', msg, parent=self)
+
+        can_buy = cash_after >= 0 and ac.year <= self.state.year
+        icon_btn(btns, '✅  Confirm Purchase', do_buy,
+                 color=GREEN if can_buy else MUTED,
+                 font=F_SMALL).pack(side='left', padx=4)
+        icon_btn(btns, '✖  Cancel', dlg.destroy,
+                 color='#5a1a1a', font=F_SMALL).pack(side='left', padx=4)
+        if not can_buy:
+            btns.winfo_children()[0].config(state='disabled')
 
     def _get_selected_serial(self):
         sel = self._fleet_tree.selection()

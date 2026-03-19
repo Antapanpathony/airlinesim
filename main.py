@@ -261,9 +261,9 @@ class SetupScreen(tk.Frame):
 # GAME SCREEN
 # ─────────────────────────────────────────────────────────────────────────────
 # Game-speed levels: game-hours per real-second
-#  0=paused, 1x=1h/s (1 day=24s), 2x=4h/s (1 day=6s),
-#  3x=12h/s (1 day=2s), 4x=48h/s (1 day=0.5s)
-_SPEED_GH = [0, 1, 4, 12, 48]
+#  0=paused, 1x=6h/s (1 day≈4s), 2x=24h/s (1 day=1s),
+#  4x=96h/s (fast-forward), 8x=384h/s (max)
+_SPEED_GH = [0, 6, 24, 96, 384]
 _SPEED_LABELS = ['⏸', '1×', '2×', '4×', '8×']
 
 

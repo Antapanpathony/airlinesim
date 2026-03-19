@@ -46,6 +46,7 @@ class OwnedAircraft:
     hours_flown: int = 0
     condition: float = 1.0   # 0-1
     assigned_route: Optional[str] = None  # route id or None
+    last_going: Optional[bool] = None    # direction of last completed flight
 
 
 @dataclass
@@ -360,6 +361,7 @@ class GameEngine:
             owned = s.get_owned(flight.serial)
             route = s.get_route(flight.route_id)
             if owned and route:
+                owned.last_going = flight.going   # remember direction for next leg
                 ac = get_aircraft(owned.ac_id)
                 if ac:
                     demand = self._route_demand(route)
@@ -383,12 +385,10 @@ class GameEngine:
                 if not in_flight:
                     route = s.get_route(owned.assigned_route)
                     if route:
-                        # Alternate direction for realism
-                        last = next(
-                            (f for f in reversed(s.active_flights)
-                             if f.serial == owned.serial), None
-                        )
-                        going = not last.going if last else True
+                        # Alternate direction: use stored last_going so return
+                        # trips work even after the outbound flight is removed
+                        going = (not owned.last_going
+                                 if owned.last_going is not None else True)
                         self._schedule_flight(owned, route, going=going)
 
         # Daily operating costs (accrued proportionally to delta)
