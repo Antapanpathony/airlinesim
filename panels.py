@@ -321,8 +321,11 @@ class RoutesPanel(tk.Frame):
         tk.Label(self, text='YOUR ROUTES', fg=GOLD, bg=BG2, font=F_SUBHEAD).pack(
             anchor='w', padx=12, pady=(4, 2))
 
+        frame = tk.Frame(self, bg=BG2)
+        frame.pack(fill='both', expand=True, padx=8, pady=4)
+
         cols = ('id','origin','dest','dist','aircraft','weekly_pax','ticket','status')
-        self._tree = ttk.Treeview(self, columns=cols, show='headings',
+        self._tree = ttk.Treeview(frame, columns=cols, show='headings',
                                    selectmode='browse', style='Treeview')
         hdrs = [('id','Route',100),('origin','From',55),('dest','To',55),
                 ('dist','Distance',90),('aircraft','Aircraft',60),
@@ -332,13 +335,10 @@ class RoutesPanel(tk.Frame):
             self._tree.column(col, width=w, anchor='center')
         self._tree.column('id', anchor='w')
 
-        sb = ttk.Scrollbar(self, orient='vertical', command=self._tree.yview)
+        sb = ttk.Scrollbar(frame, orient='vertical', command=self._tree.yview)
         self._tree.configure(yscrollcommand=sb.set)
-
-        frame = tk.Frame(self, bg=BG2)
-        frame.pack(fill='both', expand=True, padx=8, pady=4)
-        self._tree.pack(in_=frame, side='left', fill='both', expand=True)
-        sb.pack(in_=frame, side='right', fill='y')
+        self._tree.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
 
         btn_row = tk.Frame(self, bg=BG2)
         btn_row.pack(fill='x', padx=8, pady=4)
@@ -471,8 +471,11 @@ class FinancePanel(tk.Frame):
         tk.Label(self, text='FINANCIAL HISTORY', fg=GOLD, bg=BG2, font=F_SUBHEAD).pack(
             anchor='w', padx=12, pady=(8,2))
 
+        frm = tk.Frame(self, bg=BG2)
+        frm.pack(fill='both', expand=True, padx=8, pady=4)
+
         cols = ('period','revenue','costs','profit','cash')
-        self._tree = ttk.Treeview(self, columns=cols, show='headings',
+        self._tree = ttk.Treeview(frm, columns=cols, show='headings',
                                    selectmode='none', style='Treeview')
         hdrs = [('period','Month',80),('revenue','Revenue',100),
                 ('costs','Costs',100),('profit','Profit/Loss',110),('cash','Cash',110)]
@@ -480,12 +483,10 @@ class FinancePanel(tk.Frame):
             self._tree.heading(col, text=hdr)
             self._tree.column(col, width=w, anchor='center')
 
-        sb = ttk.Scrollbar(self, orient='vertical', command=self._tree.yview)
+        sb = ttk.Scrollbar(frm, orient='vertical', command=self._tree.yview)
         self._tree.configure(yscrollcommand=sb.set)
-        frm = tk.Frame(self, bg=BG2)
-        frm.pack(fill='both', expand=True, padx=8, pady=4)
-        self._tree.pack(in_=frm, side='left', fill='both', expand=True)
-        sb.pack(in_=frm, side='right', fill='y')
+        self._tree.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
 
         self.refresh()
 
