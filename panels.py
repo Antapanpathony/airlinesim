@@ -197,44 +197,25 @@ class FleetPanel(tk.Frame):
         if not self._selected_ac:
             return
         ac = self._selected_ac
-
-        dlg = tk.Toplevel(self)
-        dlg.title('Purchase Aircraft')
-        dlg.configure(bg=BG3)
-        dlg.resizable(False, False)
-        dlg.grab_set()
-
-        tk.Label(dlg, text=f'Purchase {ac.name}',
-                 fg=GOLD, bg=BG3, font=F_SUBHEAD).pack(padx=24, pady=(16, 4))
-        tk.Label(dlg, text='─' * 36, fg=BORDER, bg=BG3, font=F_SMALL).pack()
-
-        info = tk.Frame(dlg, bg=BG3)
-        info.pack(padx=24, pady=10)
         cost = int(ac.cost_m * 1_000_000)
         cash_after = self.state.cash - cost
-        rows = [
-            ('Purchase price',  money_str(cost)),
-            ('Cash remaining',  money_str(cash_after)),
-            ('Monthly ops cost', money_str(ac.monthly_cost_k * 1000) + '/mo'),
-            ('Seats',           f'{ac.passengers} passengers'),
-            ('Range',           f'{ac.range_km:,} km'),
-            ('Speed',           (f'Mach {ac.speed_kmh/1225:.1f}'
-                                 if ac.speed_kmh > 1200
-                                 else f'{ac.speed_kmh} km/h')),
-        ]
-        for i, (label, val) in enumerate(rows):
-            tk.Label(info, text=label + ':', fg=TEXT2, bg=BG3,
-                     font=F_SMALL, anchor='e', width=16).grid(
-                         row=i, column=0, sticky='e', pady=3, padx=(0, 10))
-            color = RED if label == 'Cash remaining' and cash_after < 0 else TEXT
-            tk.Label(info, text=val, fg=color, bg=BG3,
-                     font=F_SMALL, anchor='w').grid(row=i, column=1, sticky='w', pady=3)
 
-        btns = tk.Frame(dlg, bg=BG3)
-        btns.pack(padx=24, pady=(4, 20))
+        if cash_after < 0:
+            messagebox.showerror('Cannot Purchase',
+                f'Not enough cash.\nNeed {money_str(cost)}, have {money_str(int(self.state.cash))}.',
+                parent=self)
+            return
 
-        def do_buy():
-            dlg.destroy()
+        monthly = int(ac.monthly_cost_k * 1000)
+        confirmed = messagebox.askyesno('Confirm Purchase',
+            f'Purchase {ac.name}?\n\n'
+            f'  Cost:            {money_str(cost)}\n'
+            f'  Cash after:   {money_str(cash_after)}\n'
+            f'  Monthly ops: {money_str(monthly)}/mo\n'
+            f'  Seats:           {ac.passengers}  ·  Range: {ac.range_km:,} km',
+            parent=self)
+
+        if confirmed:
             ok, msg = self.engine.buy_aircraft(ac)
             if ok:
                 if self.refresh_cb:
@@ -242,16 +223,6 @@ class FleetPanel(tk.Frame):
                 self.refresh()
             else:
                 messagebox.showerror('Cannot Purchase', msg, parent=self)
-
-        can_buy = cash_after >= 0 and ac.year <= self.state.year
-        confirm_btn = icon_btn(btns, '✅  Confirm Purchase', do_buy,
-                               color=GREEN if can_buy else MUTED,
-                               font=F_SMALL)
-        confirm_btn.pack(side='left', padx=4)
-        icon_btn(btns, '✖  Cancel', dlg.destroy,
-                 color='#5a1a1a', font=F_SMALL).pack(side='left', padx=4)
-        if not can_buy:
-            confirm_btn.config(state='disabled')
 
     def _get_selected_serial(self):
         sel = self._fleet_tree.selection()
