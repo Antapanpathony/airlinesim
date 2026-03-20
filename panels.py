@@ -145,7 +145,7 @@ class FleetPanel(tk.Frame):
             self._market_tree.insert('', 'end', iid=ac.id,
                 values=(ac.name, yr_str, ac.passengers,
                         f'{ac.range_km:,}km' if ac.range_km > 0 else 'Orbital',
-                        speed_str, money_str(ac.cost_m)),
+                        speed_str, money_str(ac.cost_m * 1_000_000)),
                 tags=(tag,))
         self._market_tree.tag_configure('avail',  foreground=TEXT)
         self._market_tree.tag_configure('future', foreground=MUTED)
@@ -163,7 +163,7 @@ class FleetPanel(tk.Frame):
             return
         self._selected_ac = ac
         avail = ac.year <= self.state.year
-        affordable = ac.cost_m <= self.state.cash
+        affordable = int(ac.cost_m * 1_000_000) <= self.state.cash
         fuel_icons = {'jet':'⛽','avgas':'🛢','hydrogen':'💧','electric':'⚡','saf':'🌱','methane':'🔥'}
         fuel_icon = fuel_icons.get(ac.fuel_type, '⛽')
         cat_icons = {'pioneer':'🪂','regional':'🛩','narrow':'✈','wide':'🛫',
@@ -183,8 +183,8 @@ class FleetPanel(tk.Frame):
             f'📏  {range_str}\n'
             f'💨  {speed_str}\n'
             f'{fuel_icon}  {ac.fuel_type.title()} propulsion\n\n'
-            f'💰  {money_str(ac.cost_m)}\n'
-            f'🔧  {money_str(ac.monthly_cost_k/1000)}/month ops\n\n'
+            f'💰  {money_str(ac.cost_m * 1_000_000)}\n'
+            f'🔧  {money_str(ac.monthly_cost_k * 1000)}/month ops\n\n'
             f'📖  {ac.notes}'
         )
         self._detail_lbl.config(text=details, fg=TEXT if avail else MUTED)
@@ -210,11 +210,12 @@ class FleetPanel(tk.Frame):
 
         info = tk.Frame(dlg, bg=BG3)
         info.pack(padx=24, pady=10)
-        cash_after = self.state.cash - ac.cost_m
+        cost = int(ac.cost_m * 1_000_000)
+        cash_after = self.state.cash - cost
         rows = [
-            ('Purchase price',  money_str(ac.cost_m)),
+            ('Purchase price',  money_str(cost)),
             ('Cash remaining',  money_str(cash_after)),
-            ('Monthly ops cost', money_str(ac.monthly_cost_k / 1000) + '/mo'),
+            ('Monthly ops cost', money_str(ac.monthly_cost_k * 1000) + '/mo'),
             ('Seats',           f'{ac.passengers} passengers'),
             ('Range',           f'{ac.range_km:,} km'),
             ('Speed',           (f'Mach {ac.speed_kmh/1225:.1f}'
@@ -236,7 +237,6 @@ class FleetPanel(tk.Frame):
             dlg.destroy()
             ok, msg = self.engine.buy_aircraft(ac)
             if ok:
-                messagebox.showinfo('Purchase Complete', msg, parent=self)
                 if self.refresh_cb:
                     self.refresh_cb()
                 self.refresh()
@@ -244,13 +244,14 @@ class FleetPanel(tk.Frame):
                 messagebox.showerror('Cannot Purchase', msg, parent=self)
 
         can_buy = cash_after >= 0 and ac.year <= self.state.year
-        icon_btn(btns, '✅  Confirm Purchase', do_buy,
-                 color=GREEN if can_buy else MUTED,
-                 font=F_SMALL).pack(side='left', padx=4)
+        confirm_btn = icon_btn(btns, '✅  Confirm Purchase', do_buy,
+                               color=GREEN if can_buy else MUTED,
+                               font=F_SMALL)
+        confirm_btn.pack(side='left', padx=4)
         icon_btn(btns, '✖  Cancel', dlg.destroy,
                  color='#5a1a1a', font=F_SMALL).pack(side='left', padx=4)
         if not can_buy:
-            btns.winfo_children()[0].config(state='disabled')
+            confirm_btn.config(state='disabled')
 
     def _get_selected_serial(self):
         sel = self._fleet_tree.selection()
@@ -372,12 +373,13 @@ class RoutesPanel(tk.Frame):
         frame = tk.Frame(self, bg=BG2)
         frame.pack(fill='both', expand=True, padx=8, pady=4)
 
-        cols = ('id','origin','dest','dist','aircraft','weekly_pax','ticket','status')
+        cols = ('id','origin','dest','dist','aircraft','weekly_pax','ticket','rev_trip','status')
         self._tree = ttk.Treeview(frame, columns=cols, show='headings',
                                    selectmode='browse', style='Treeview')
         hdrs = [('id','Route',100),('origin','From',55),('dest','To',55),
                 ('dist','Distance',90),('aircraft','Aircraft',60),
-                ('weekly_pax','Wk Pax',70),('ticket','Ticket',75),('status','Status',80)]
+                ('weekly_pax','Wk Pax',70),('ticket','Ticket',70),
+                ('rev_trip','Rev/Trip',90),('status','Status',80)]
         for col, hdr, w in hdrs:
             self._tree.heading(col, text=hdr)
             self._tree.column(col, width=w, anchor='center')
@@ -402,11 +404,12 @@ class RoutesPanel(tk.Frame):
         ac_frame = tk.Frame(self, bg=BG2)
         ac_frame.pack(fill='x', padx=8, pady=(0, 8))
 
-        ac_cols = ('name', 'condition', 'hours', 'status')
+        ac_cols = ('name', 'condition', 'hours', 'revenue', 'status')
         self._ac_tree = ttk.Treeview(ac_frame, columns=ac_cols, show='headings',
                                       selectmode='none', style='Treeview', height=5)
-        ac_hdrs = [('name', 'Aircraft', 200), ('condition', 'Cond.', 70),
-                   ('hours', 'Hours', 80), ('status', 'Status', 100)]
+        ac_hdrs = [('name', 'Aircraft', 160), ('condition', 'Cond.', 60),
+                   ('hours', 'Hours', 70), ('revenue', 'Rev/Trip', 90),
+                   ('status', 'Status', 100)]
         for col, hdr, w in ac_hdrs:
             self._ac_tree.heading(col, text=hdr)
             self._ac_tree.column(col, width=w, anchor='center')
@@ -439,10 +442,12 @@ class RoutesPanel(tk.Frame):
             n_ac = len(route.aircraft_ids)
             status = '🟢 Active' if n_ac > 0 else '🔴 No AC'
             tag = 'active' if n_ac > 0 else 'idle'
+            rev_str = money_str(route.last_revenue) if route.last_revenue > 0 else '—'
             self._tree.insert('', 'end', iid=route.id,
                 values=(route.id, route.origin, route.dest,
                         f'{route.distance_km:,.0f}km', n_ac,
-                        f'{route.weekly_pax:,}', f'${route.ticket_price:.0f}', status),
+                        f'{route.weekly_pax:,}', f'${route.ticket_price:.0f}',
+                        rev_str, status),
                 tags=(tag,))
         self._tree.tag_configure('active', foreground=GREEN)
         self._tree.tag_configure('idle', foreground=TEXT2)
@@ -469,10 +474,14 @@ class RoutesPanel(tk.Frame):
                 continue
             cond = f'{owned.condition * 100:.0f}%'
             hours = f'{owned.hours_flown:,}h'
-            in_flight = any(f.serial == serial for f in self.state.active_flights)
+            active_flight = next(
+                (f for f in self.state.active_flights if f.serial == serial), None)
+            in_flight = active_flight is not None
             status = '✈ In Flight' if in_flight else '🅿 At Gate'
             tag = 'inflight' if in_flight else 'gate'
-            self._ac_tree.insert('', 'end', values=(owned.name, cond, hours, status), tags=(tag,))
+            rev_str = money_str(active_flight.revenue) if active_flight else '—'
+            self._ac_tree.insert('', 'end',
+                values=(owned.name, cond, hours, rev_str, status), tags=(tag,))
         self._ac_tree.tag_configure('inflight', foreground=ACCENT2)
         self._ac_tree.tag_configure('gate', foreground=TEXT2)
 
