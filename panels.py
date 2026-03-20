@@ -248,10 +248,10 @@ class FleetPanel(tk.Frame):
         dlg.title('Assign Route')
         dlg.resizable(False, False)
 
-        tk.Label(dlg, text='Select a route:', fg=TEXT1, bg=BG2, font=F_SMALL).pack(
+        tk.Label(dlg, text='Select a route:', fg=TEXT, bg=BG2, font=F_SMALL).pack(
             padx=12, pady=(10, 4), anchor='w')
 
-        lb = tk.Listbox(dlg, bg=BG3, fg=TEXT1, selectbackground=ACCENT,
+        lb = tk.Listbox(dlg, bg=BG3, fg=TEXT, selectbackground=ACCENT,
                         font=F_SMALL, height=min(len(self.state.routes), 12),
                         activestyle='none')
         for r in self.state.routes:
@@ -531,11 +531,11 @@ class RoutesPanel(tk.Frame):
             text=f'Set ticket price for {rid}\n'
                  f'Current: ${route.ticket_price:.0f}  ·  Distance: {route.distance_km:.0f} km\n'
                  f'Lower prices attract more passengers.',
-            fg=TEXT1, bg=BG2, font=F_SMALL, justify='left').pack(padx=12, pady=(10, 6))
+            fg=TEXT, bg=BG2, font=F_SMALL, justify='left').pack(padx=12, pady=(10, 6))
 
         entry_var = tk.StringVar(value=str(int(route.ticket_price)))
-        entry = tk.Entry(dlg, textvariable=entry_var, bg=BG3, fg=TEXT1,
-                         insertbackground=TEXT1, font=F_SMALL, width=10)
+        entry = tk.Entry(dlg, textvariable=entry_var, bg=BG3, fg=TEXT,
+                         insertbackground=TEXT, font=F_SMALL, width=10)
         entry.pack(padx=12, pady=4)
         entry.select_range(0, 'end')
         entry.focus_set()
