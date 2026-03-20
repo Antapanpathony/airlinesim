@@ -18,9 +18,8 @@ class FleetPanel(tk.Frame):
         self._build()
 
     def _build(self):
-        # Left: owned aircraft
+        # Left: owned aircraft (packed LAST so expand=True doesn't steal space from fixed-width right panels)
         left = tk.Frame(self, bg=BG2)
-        left.pack(side='left', fill='both', expand=True, padx=(0, 2))
 
         tk.Label(left, text='YOUR FLEET', fg=GOLD, bg=BG2, font=F_SUBHEAD).pack(
             anchor='w', padx=12, pady=(10, 4))
@@ -63,7 +62,7 @@ class FleetPanel(tk.Frame):
         self._buy_btn.pack(padx=10, pady=4, fill='x')
         self._buy_btn.config(state='disabled')
 
-        # Right: marketplace (packed after detail, so it sits left of the detail card)
+        # Right: marketplace (packed before left so it claims its fixed width first)
         right = tk.Frame(self, bg=BG2, width=420)
         right.pack(side='right', fill='both', padx=(2, 0))
         right.pack_propagate(False)
@@ -98,6 +97,9 @@ class FleetPanel(tk.Frame):
         self._market_tree.configure(yscrollcommand=sb2.set)
         self._market_tree.pack(side='left', fill='both', expand=True, padx=(8,0), pady=4)
         sb2.pack(side='left', fill='y', pady=4)
+
+        # Pack left LAST so expand=True only consumes remaining space after right panels claimed theirs
+        left.pack(side='left', fill='both', expand=True, padx=(0, 2))
 
         self._selected_ac = None
         self.refresh()
