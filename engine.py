@@ -55,7 +55,7 @@ class ActiveFlight:
     route_id: str
     depart_day: float     # game_day when departed
     arrive_day: float     # game_day when it lands
-    revenue_m: float      # revenue (millions) earned on arrival
+    revenue: float        # revenue (dollars) earned on arrival
     going: bool = True    # True = origin→dest, False = dest→origin
 
 
@@ -69,6 +69,7 @@ class Route:
     aircraft_ids: List[int] = field(default_factory=list)  # serial numbers
     active: bool = True
     weekly_pax: int = 0     # for display
+    last_revenue: float = 0.0  # revenue of last completed flight (dollars)
 
 
 @dataclass
@@ -90,7 +91,7 @@ class GameState:
     month: int = 1           # 1-12
     day: int = 1             # 1-31
     game_day: float = 0.0    # days elapsed since Jan 1 of start_year
-    cash: float = 10.0       # millions USD
+    cash: float = 10_000_000.0  # exact USD
     reputation: float = 50.0 # 0-100
     total_pax: int = 0
     fleet: List[OwnedAircraft] = field(default_factory=list)
@@ -102,11 +103,11 @@ class GameState:
     _serial_counter: int = 1
     _triggered_events: List[int] = field(default_factory=list)
 
-    # Running totals
+    # Running totals (dollars)
     total_revenue: float = 0.0
     total_costs: float = 0.0
 
-    # Current-period accumulators (reset each month)
+    # Current-period accumulators (reset each month, dollars)
     _period_revenue: float = 0.0
     _period_costs: float = 0.0
 
@@ -146,12 +147,13 @@ class GameState:
         return None
 
     def fleet_value(self) -> float:
+        """Return total fleet value in dollars."""
         total = 0.0
         for o in self.fleet:
             ac = get_aircraft(o.ac_id)
             if ac:
                 age_factor = max(0.2, 1.0 - (self.year - o.year_acquired) * 0.04)
-                total += ac.cost_m * age_factor * o.condition
+                total += ac.cost_m * 1_000_000 * age_factor * o.condition
         return total
 
     @property
@@ -168,15 +170,17 @@ class GameEngine:
     def can_buy(self, ac: Aircraft) -> Tuple[bool, str]:
         if ac.year > self.state.year:
             return False, f"Not available until {ac.year}"
-        if ac.cost_m > self.state.cash:
-            return False, f"Need ${ac.cost_m:.1f}M (have ${self.state.cash:.1f}M)"
+        cost = int(ac.cost_m * 1_000_000)
+        if cost > self.state.cash:
+            return False, f"Need ${cost:,} (have ${int(self.state.cash):,})"
         return True, "OK"
 
     def buy_aircraft(self, ac: Aircraft) -> Tuple[bool, str]:
         ok, msg = self.can_buy(ac)
         if not ok:
             return False, msg
-        self.state.cash -= ac.cost_m
+        cost = int(ac.cost_m * 1_000_000)
+        self.state.cash -= cost
         owned = OwnedAircraft(
             ac_id=ac.id,
             name=ac.name,
@@ -185,7 +189,7 @@ class GameEngine:
         )
         self.state.fleet.append(owned)
         self.state.events_log.append(
-            f"{self.state.date_str()}: Purchased {ac.name} for ${ac.cost_m:.1f}M"
+            f"{self.state.date_str()}: Purchased {ac.name} for ${cost:,}"
         )
         return True, f"Purchased {ac.name}"
 
@@ -199,16 +203,16 @@ class GameEngine:
         if not ac:
             return False, "Unknown aircraft type"
         age = self.state.year - owned.year_acquired
-        sale_price = ac.cost_m * max(0.15, 1.0 - age * 0.04) * owned.condition
+        sale_price = int(ac.cost_m * 1_000_000 * max(0.15, 1.0 - age * 0.04) * owned.condition)
         self.state.cash += sale_price
         self.state.active_flights = [
             f for f in self.state.active_flights if f.serial != serial
         ]
         self.state.fleet.remove(owned)
         self.state.events_log.append(
-            f"{self.state.date_str()}: Sold {owned.name} for ${sale_price:.2f}M"
+            f"{self.state.date_str()}: Sold {owned.name} for ${sale_price:,}"
         )
-        return True, f"Sold {owned.name} for ${sale_price:.2f}M"
+        return True, f"Sold {owned.name} for ${sale_price:,}"
 
     # ── Routes ───────────────────────────────────────────────────────────────
 
@@ -322,14 +326,14 @@ class GameEngine:
         pax = min(ac.passengers, demand)
         load_factor = pax / max(1, ac.passengers)
         yield_adj = 0.8 + load_factor * 0.4
-        revenue_m = pax * route.ticket_price * yield_adj / 1_000_000
+        revenue = pax * route.ticket_price * yield_adj  # exact dollars
 
         s.active_flights.append(ActiveFlight(
             serial=owned.serial,
             route_id=route.id,
             depart_day=depart_day,
             arrive_day=arrive_day,
-            revenue_m=revenue_m,
+            revenue=revenue,
             going=going,
         ))
 
@@ -353,15 +357,16 @@ class GameEngine:
         arrived = [f for f in s.active_flights if s.game_day >= f.arrive_day]
         for flight in arrived:
             s.active_flights.remove(flight)
-            s.cash += flight.revenue_m
-            revenue += flight.revenue_m
-            s.total_revenue += flight.revenue_m
-            s._period_revenue += flight.revenue_m
+            s.cash += flight.revenue
+            revenue += flight.revenue
+            s.total_revenue += flight.revenue
+            s._period_revenue += flight.revenue
 
             owned = s.get_owned(flight.serial)
             route = s.get_route(flight.route_id)
             if owned and route:
                 owned.last_going = flight.going   # remember direction for next leg
+                route.last_revenue = flight.revenue
                 ac = get_aircraft(owned.ac_id)
                 if ac:
                     demand = self._route_demand(route)
@@ -396,18 +401,18 @@ class GameEngine:
         for owned in s.fleet:
             ac = get_aircraft(owned.ac_id)
             if ac:
-                daily_m = ac.monthly_cost_k / 30.0 / 1000.0
+                daily = ac.monthly_cost_k * 1000 / 30.0  # monthly_cost_k in thousands → dollars/day
                 if not owned.assigned_route:
-                    daily_m *= 0.4  # parked aircraft cost less
-                c = daily_m * delta_days
+                    daily *= 0.4  # parked aircraft cost less
+                c = daily * delta_days
                 costs += c
                 s.cash -= c
                 s.total_costs += c
                 s._period_costs += c
 
-        # Fixed overhead
-        overhead_daily = max(0.0002,
-                             (len(s.fleet) * 0.02 + len(s.routes) * 0.01) / 90.0)
+        # Fixed overhead (dollars/day)
+        overhead_daily = max(200.0,
+                             (len(s.fleet) * 20_000 + len(s.routes) * 10_000) / 90.0)
         ov = overhead_daily * delta_days
         costs += ov
         s.cash -= ov
@@ -439,7 +444,7 @@ class GameEngine:
                     s._triggered_events.append(yr)
                     rep_change = demand_mult * 20
                     s.reputation = max(0.0, min(100.0, s.reputation + rep_change))
-                    s.cash += cash_effect / 1000.0  # apply cash impact
+                    s.cash += cash_effect * 1000.0  # cash_effect in thousands → dollars
                     s.events_log.append(f"📰 {s.year}: {desc}")
                     events_triggered.append(desc)
 
@@ -453,8 +458,8 @@ class GameEngine:
 
 
 def new_game(name: str, hub: str, start_year: int, difficulty: str) -> GameState:
-    budgets = {'easy': 25.0, 'normal': 10.0, 'hard': 5.0, 'tycoon': 2.0}
-    cash = budgets.get(difficulty, 10.0)
+    budgets = {'easy': 25_000_000, 'normal': 10_000_000, 'hard': 5_000_000, 'tycoon': 2_000_000}
+    cash = budgets.get(difficulty, 10_000_000)
     s = GameState(
         airline_name=name,
         hub_code=hub,

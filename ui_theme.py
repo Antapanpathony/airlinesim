@@ -155,14 +155,11 @@ def separator(parent, orient='horizontal', color=BORDER):
         return tk.Frame(parent, bg=color, width=1)
 
 
-def money_str(m: float) -> str:
-    """Format a float (millions) as a readable string."""
-    if abs(m) >= 1000:
-        return f'${m/1000:.2f}B'
-    elif abs(m) >= 1:
-        return f'${m:.2f}M'
-    else:
-        return f'${m*1000:.0f}K'
+def money_str(amount: float) -> str:
+    """Format an exact dollar amount with comma separators."""
+    if amount < 0:
+        return f'-${abs(amount):,.0f}'
+    return f'${amount:,.0f}'
 
 
 def pax_str(n: int) -> str:

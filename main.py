@@ -236,10 +236,10 @@ class SetupScreen(tk.Frame):
     def _make_diff_frame(self, parent):
         f = tk.Frame(parent, bg=BG2)
         diffs = [
-            ('easy',   'Easy',   GREEN,  '$25M starting budget'),
-            ('normal', 'Normal', ACCENT2,'$10M starting budget'),
-            ('hard',   'Hard',   ORANGE, '$5M starting budget'),
-            ('tycoon', 'Tycoon', RED,    '$2M — no mercy'),
+            ('easy',   'Easy',   GREEN,  '$25,000,000 starting budget'),
+            ('normal', 'Normal', ACCENT2,'$10,000,000 starting budget'),
+            ('hard',   'Hard',   ORANGE, '$5,000,000 starting budget'),
+            ('tycoon', 'Tycoon', RED,    '$2,000,000 — no mercy'),
         ]
         for val, label, color, tip in diffs:
             btn = tk.Radiobutton(f, text=label, variable=self._diff_var, value=val,
@@ -536,7 +536,7 @@ class GameScreen(tk.Frame):
                 self._show_events_popup(result['events'])
 
             # Bankruptcy check
-            if self.state.cash < -50 and not self._popup_open:
+            if self.state.cash < -50_000_000 and not self._popup_open:
                 self._speed_idx = 0
                 self._update_speed_btns()
                 self._popup_open = True
@@ -721,17 +721,40 @@ class App(tk.Tk):
             data.setdefault('_period_revenue', 0.0)
             data.setdefault('_period_costs', 0.0)
 
+            # Migrate old saves: detect millions-based cash (< 10_000) → convert to dollars
+            old_format = data.get('cash', 0) < 10_000
+            if old_format:
+                data['cash'] = data['cash'] * 1_000_000
+                data['total_revenue'] = data.get('total_revenue', 0) * 1_000_000
+                data['total_costs'] = data.get('total_costs', 0) * 1_000_000
+                data['_period_revenue'] = data.get('_period_revenue', 0) * 1_000_000
+                data['_period_costs'] = data.get('_period_costs', 0) * 1_000_000
+
             # Rebuild nested dataclasses
             fleet = [OwnedAircraft(**o) for o in data.get('fleet', [])]
-            routes = [Route(**r) for r in data.get('routes', [])]
+            # Migrate routes: add last_revenue default if missing
+            raw_routes = data.get('routes', [])
+            for r in raw_routes:
+                r.setdefault('last_revenue', 0.0)
+            routes = [Route(**r) for r in raw_routes]
 
             raw_flights = data.get('active_flights', [])
+            # Migrate old flights: revenue_m (millions) → revenue (dollars)
+            for f in raw_flights:
+                if 'revenue_m' in f:
+                    f['revenue'] = f.pop('revenue_m') * 1_000_000
+                f.setdefault('revenue', 0.0)
             active_flights = [ActiveFlight(**f) for f in raw_flights]
 
             history = []
             for h in data.get('finance_history', []):
                 if 'quarter' in h:
                     h['month'] = h.pop('quarter')
+                # Migrate millions → dollars for old saves
+                if old_format:
+                    for key in ('revenue', 'costs', 'profit', 'cash_end'):
+                        if key in h:
+                            h[key] = h[key] * 1_000_000
                 history.append(FinancialRecord(**h))
 
             data['fleet'] = fleet
