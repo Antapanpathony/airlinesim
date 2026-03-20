@@ -1,6 +1,6 @@
 """Game panels: Fleet, Routes, Finance, Events"""
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 import math
 from ui_theme import *
 from data import AIRCRAFT_DB, CITY_DICT, CITIES, get_aircraft, available_aircraft
@@ -240,20 +240,38 @@ class FleetPanel(tk.Frame):
         if not self.state.routes:
             messagebox.showinfo('No Routes', 'Open some routes first in the Routes panel.', parent=self)
             return
-        route_options = [f'{r.id} ({r.distance_km:.0f}km)' for r in self.state.routes]
-        choice = simpledialog.askstring('Assign Route',
-            f'Choose route:\n' + '\n'.join(f'  {i+1}. {r}' for i, r in enumerate(route_options)),
-            parent=self)
-        if not choice:
-            return
-        # Try to parse number or ID
-        rid = None
-        try:
-            idx = int(choice.strip()) - 1
-            if 0 <= idx < len(self.state.routes):
-                rid = self.state.routes[idx].id
-        except ValueError:
-            rid = choice.strip().upper()
+
+        # Route picker dialog using wait_window (works reliably on Linux/Wayland)
+        result = [None]
+        dlg = tk.Toplevel(self, bg=BG2)
+        dlg.title('Assign Route')
+        dlg.resizable(False, False)
+
+        tk.Label(dlg, text='Select a route:', fg=TEXT1, bg=BG2, font=F_SMALL).pack(
+            padx=12, pady=(10, 4), anchor='w')
+
+        lb = tk.Listbox(dlg, bg=BG3, fg=TEXT1, selectbackground=ACCENT,
+                        font=F_SMALL, height=min(len(self.state.routes), 12),
+                        activestyle='none')
+        for r in self.state.routes:
+            lb.insert('end', f'{r.id}  —  {r.distance_km:.0f} km')
+        lb.pack(padx=12, pady=4, fill='x')
+        lb.selection_set(0)
+
+        def on_assign():
+            sel = lb.curselection()
+            if sel:
+                result[0] = self.state.routes[sel[0]].id
+            dlg.destroy()
+
+        btn_row = tk.Frame(dlg, bg=BG2)
+        btn_row.pack(pady=8)
+        icon_btn(btn_row, 'Assign', on_assign, color=ACCENT, font=F_SMALL).pack(side='left', padx=4)
+        icon_btn(btn_row, 'Cancel', dlg.destroy, color='#3a3a3a', font=F_SMALL).pack(side='left', padx=4)
+
+        dlg.wait_window()
+
+        rid = result[0]
         if rid:
             ok, msg = self.engine.assign_aircraft(serial, rid)
             if ok:
@@ -501,13 +519,47 @@ class RoutesPanel(tk.Frame):
         route = self.state.get_route(rid)
         if not route:
             return
-        price = simpledialog.askfloat('Ticket Price',
-            f'Set ticket price for {rid} (current: ${route.ticket_price:.0f})\n'
-            f'Route distance: {route.distance_km:.0f} km\n'
-            f'Tip: Lower prices attract more passengers.',
-            minvalue=10, maxvalue=10000, parent=self)
-        if price:
-            route.ticket_price = price
+
+        # Price entry dialog using wait_window (works reliably on Linux/Wayland)
+        result = [None]
+        dlg = tk.Toplevel(self, bg=BG2)
+        dlg.title('Ticket Price')
+        dlg.resizable(False, False)
+
+        tk.Label(dlg,
+            text=f'Set ticket price for {rid}\n'
+                 f'Current: ${route.ticket_price:.0f}  ·  Distance: {route.distance_km:.0f} km\n'
+                 f'Lower prices attract more passengers.',
+            fg=TEXT1, bg=BG2, font=F_SMALL, justify='left').pack(padx=12, pady=(10, 6))
+
+        entry_var = tk.StringVar(value=str(int(route.ticket_price)))
+        entry = tk.Entry(dlg, textvariable=entry_var, bg=BG3, fg=TEXT1,
+                         insertbackground=TEXT1, font=F_SMALL, width=10)
+        entry.pack(padx=12, pady=4)
+        entry.select_range(0, 'end')
+        entry.focus_set()
+
+        def on_set():
+            try:
+                val = float(entry_var.get())
+                if 10 <= val <= 10000:
+                    result[0] = val
+                    dlg.destroy()
+                else:
+                    messagebox.showwarning('Invalid', 'Price must be between $10 and $10,000.', parent=dlg)
+            except ValueError:
+                messagebox.showwarning('Invalid', 'Enter a numeric price.', parent=dlg)
+
+        entry.bind('<Return>', lambda e: on_set())
+        btn_row = tk.Frame(dlg, bg=BG2)
+        btn_row.pack(pady=8)
+        icon_btn(btn_row, 'Set Price', on_set, color=ACCENT, font=F_SMALL).pack(side='left', padx=4)
+        icon_btn(btn_row, 'Cancel', dlg.destroy, color='#3a3a3a', font=F_SMALL).pack(side='left', padx=4)
+
+        dlg.wait_window()
+
+        if result[0] is not None:
+            route.ticket_price = result[0]
             self.refresh()
 
 
