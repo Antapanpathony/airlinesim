@@ -35,19 +35,20 @@ class FleetPanel(tk.Frame):
             self._fleet_tree.column(col, width=w, anchor='center')
         self._fleet_tree.column('name', anchor='w')
 
-        sb = ttk.Scrollbar(left, orient='vertical', command=self._fleet_tree.yview)
-        self._fleet_tree.configure(yscrollcommand=sb.set)
-        self._fleet_tree.pack(side='left', fill='both', expand=True, padx=(8,0), pady=4)
-        sb.pack(side='left', fill='y', pady=4)
-
+        # btn_row must be packed with side='bottom' BEFORE the tree claims all space
         btn_row = tk.Frame(left, bg=BG2)
-        btn_row.pack(fill='x', padx=8, pady=4)
+        btn_row.pack(side='bottom', fill='x', padx=8, pady=4)
         icon_btn(btn_row, '✈  Assign to Route', self._assign_route,
                  color=ACCENT, font=F_SMALL).pack(side='left', padx=2)
         icon_btn(btn_row, '⬛  Remove from Route', self._remove_route,
                  color='#1a3050', font=F_SMALL).pack(side='left', padx=2)
         icon_btn(btn_row, '💰  Sell Aircraft', self._sell_aircraft,
                  color='#5a1a1a', font=F_SMALL).pack(side='left', padx=2)
+
+        sb = ttk.Scrollbar(left, orient='vertical', command=self._fleet_tree.yview)
+        self._fleet_tree.configure(yscrollcommand=sb.set)
+        self._fleet_tree.pack(side='left', fill='both', expand=True, padx=(8,0), pady=4)
+        sb.pack(side='left', fill='y', pady=4)
 
         # Detail card (packed first so it anchors to the far right)
         self._detail = tk.Frame(self, bg=BG3, width=220)
