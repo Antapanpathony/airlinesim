@@ -307,7 +307,7 @@ class GameEngine:
         return int(base * random.uniform(0.85, 1.15))
 
     def _schedule_flight(self, owned: OwnedAircraft, route: Route,
-                         going: bool = True):
+                         going: bool = True, depart_day: float = None):
         """Schedule the next one-way flight for this aircraft."""
         s = self.state
         ac = get_aircraft(owned.ac_id)
@@ -317,7 +317,8 @@ class GameEngine:
         flight_hours = route.distance_km / max(1, ac.speed_kmh) + 0.5
         flight_days = flight_hours / 24.0
 
-        depart_day = s.game_day
+        if depart_day is None:
+            depart_day = s.game_day
         arrive_day = depart_day + flight_days
 
         demand = self._route_demand(route)
@@ -353,48 +354,52 @@ class GameEngine:
         costs = 0.0
         pax_total = 0
 
-        # Process arrived flights
-        arrived = [f for f in s.active_flights if s.game_day >= f.arrive_day]
-        for flight in arrived:
-            s.active_flights.remove(flight)
-            s.cash += flight.revenue
-            revenue += flight.revenue
-            s.total_revenue += flight.revenue
-            s._period_revenue += flight.revenue
+        # Process arrived flights in a loop so that at high game speeds
+        # (large delta_hours per tick) chained legs that also arrive within
+        # this same tick are caught without waiting for the next tick.
+        while True:
+            arrived = [f for f in s.active_flights if s.game_day >= f.arrive_day]
+            if not arrived:
+                break
+            for flight in arrived:
+                s.active_flights.remove(flight)
+                s.cash += flight.revenue
+                revenue += flight.revenue
+                s.total_revenue += flight.revenue
+                s._period_revenue += flight.revenue
 
-            owned = s.get_owned(flight.serial)
-            route = s.get_route(flight.route_id)
-            if owned and route:
-                owned.last_going = flight.going   # remember direction for next leg
-                route.last_revenue = flight.revenue
-                ac = get_aircraft(owned.ac_id)
-                if ac:
-                    demand = self._route_demand(route)
-                    pax = min(ac.passengers, demand)
-                    s.total_pax += pax
-                    pax_total += pax
-                    owned.condition = max(
-                        0.3, owned.condition - random.uniform(0.0005, 0.002)
-                    )
-                    owned.hours_flown += int(
-                        (flight.arrive_day - flight.depart_day) * 24
-                    )
-                    # Update weekly_pax estimate on the route
-                    days_per_flight = max(0.001, flight.arrive_day - flight.depart_day)
-                    route.weekly_pax = int(pax * 7.0 / days_per_flight)
+                owned = s.get_owned(flight.serial)
+                route = s.get_route(flight.route_id)
+                if owned and route:
+                    owned.last_going = flight.going
+                    route.last_revenue = flight.revenue
+                    ac = get_aircraft(owned.ac_id)
+                    if ac:
+                        demand = self._route_demand(route)
+                        pax = min(ac.passengers, demand)
+                        s.total_pax += pax
+                        pax_total += pax
+                        owned.condition = max(
+                            0.3, owned.condition - random.uniform(0.0005, 0.002)
+                        )
+                        owned.hours_flown += int(
+                            (flight.arrive_day - flight.depart_day) * 24
+                        )
+                        days_per_flight = max(0.001, flight.arrive_day - flight.depart_day)
+                        route.weekly_pax = int(pax * 7.0 / days_per_flight)
+                    # Next leg departs from arrival time so no idle gap at any speed
+                    self._schedule_flight(owned, route,
+                                          going=not flight.going,
+                                          depart_day=flight.arrive_day)
 
-        # Schedule new flights for idle aircraft on active routes
+        # Schedule first flight for newly-assigned aircraft (no prior leg)
         for owned in s.fleet:
             if owned.assigned_route:
                 in_flight = any(f.serial == owned.serial for f in s.active_flights)
-                if not in_flight:
+                if not in_flight and owned.last_going is None:
                     route = s.get_route(owned.assigned_route)
                     if route:
-                        # Alternate direction: use stored last_going so return
-                        # trips work even after the outbound flight is removed
-                        going = (not owned.last_going
-                                 if owned.last_going is not None else True)
-                        self._schedule_flight(owned, route, going=going)
+                        self._schedule_flight(owned, route, going=True)
 
         # Daily operating costs (accrued proportionally to delta)
         delta_days = delta_hours / 24.0
@@ -410,9 +415,19 @@ class GameEngine:
                 s.total_costs += c
                 s._period_costs += c
 
-        # Fixed overhead (dollars/day)
-        overhead_daily = max(200.0,
-                             (len(s.fleet) * 20_000 + len(s.routes) * 10_000) / 90.0)
+        # Fixed overhead (dollars/day), scaled by fleet era so pioneer aircraft
+        # aren't bankrupted by costs calibrated for modern jets.
+        # avg_monthly_k ~0.2 for Benoist → scale≈0.004; ~200 for wide-body → scale≈1.0
+        if s.fleet:
+            avg_monthly_k = sum(
+                get_aircraft(o.ac_id).monthly_cost_k
+                for o in s.fleet if get_aircraft(o.ac_id)
+            ) / len(s.fleet)
+        else:
+            avg_monthly_k = 50.0
+        era_scale = min(1.0, avg_monthly_k / 50.0)
+        overhead_daily = max(10.0,
+                             (len(s.fleet) * 20_000 + len(s.routes) * 10_000) / 90.0 * era_scale)
         ov = overhead_daily * delta_days
         costs += ov
         s.cash -= ov
