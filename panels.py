@@ -624,6 +624,7 @@ class FinancePanel(tk.Frame):
 
         self._chart = tk.Canvas(self, bg=BG3, height=180, highlightthickness=0)
         self._chart.pack(fill='x', padx=8, pady=4)
+        self._chart.bind('<Configure>', lambda e: self._draw_chart())
 
         # History table
         tk.Label(self, text='FINANCIAL HISTORY', fg=GOLD, bg=BG2, font=F_SUBHEAD).pack(
@@ -675,7 +676,7 @@ class FinancePanel(tk.Frame):
     def _draw_chart(self):
         c = self._chart
         c.delete('all')
-        w = c.winfo_width() or 600
+        w = c.winfo_width() if c.winfo_width() > 1 else 600
         h = 180
         pad = 50
 

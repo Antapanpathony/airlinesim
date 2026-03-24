@@ -410,9 +410,19 @@ class GameEngine:
                 s.total_costs += c
                 s._period_costs += c
 
-        # Fixed overhead (dollars/day)
-        overhead_daily = max(200.0,
-                             (len(s.fleet) * 20_000 + len(s.routes) * 10_000) / 90.0)
+        # Fixed overhead (dollars/day), scaled by fleet era so pioneer aircraft
+        # aren't bankrupted by costs calibrated for modern jets.
+        # avg_monthly_k ~0.2 for Benoist → scale≈0.004; ~200 for wide-body → scale≈1.0
+        if s.fleet:
+            avg_monthly_k = sum(
+                get_aircraft(o.ac_id).monthly_cost_k
+                for o in s.fleet if get_aircraft(o.ac_id)
+            ) / len(s.fleet)
+        else:
+            avg_monthly_k = 50.0
+        era_scale = min(1.0, avg_monthly_k / 50.0)
+        overhead_daily = max(10.0,
+                             (len(s.fleet) * 20_000 + len(s.routes) * 10_000) / 90.0 * era_scale)
         ov = overhead_daily * delta_days
         costs += ov
         s.cash -= ov
