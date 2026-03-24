@@ -242,10 +242,13 @@ class FleetPanel(tk.Frame):
             messagebox.showinfo('No Routes', 'Open some routes first in the Routes panel.', parent=self)
             return
 
-        # Route picker dialog
+        # Route picker dialog — withdraw first so the WM doesn't map an
+        # empty frame; build widgets while hidden, then deiconify.
         result = [None]
-        dlg = tk.Toplevel(self, bg=BG2)
+        dlg = tk.Toplevel(self)
+        dlg.withdraw()
         dlg.title('Assign Route')
+        dlg.configure(bg=BG2)
         dlg.transient(self.winfo_toplevel())
 
         tk.Label(dlg, text='Select a route:', fg=TEXT, bg=BG2, font=F_SMALL).pack(
@@ -271,17 +274,15 @@ class FleetPanel(tk.Frame):
         icon_btn(btn_row, 'Assign', on_assign, color=ACCENT, font=F_SMALL).pack(side='left', padx=4)
         icon_btn(btn_row, 'Cancel', dlg.destroy, color='#3a3a3a', font=F_SMALL).pack(side='left', padx=4)
 
-        # update() (not just update_idletasks) forces the compositor to map the
-        # window and calculate real geometry before we read winfo_width/height
-        dlg.update()
+        # Compute natural size while hidden, then show centred over parent
+        dlg.update_idletasks()
         pw = self.winfo_toplevel()
-        x = pw.winfo_rootx() + (pw.winfo_width() - dlg.winfo_width()) // 2
-        y = pw.winfo_rooty() + (pw.winfo_height() - dlg.winfo_height()) // 2
-        dlg.geometry(f'+{x}+{y}')
+        x = pw.winfo_rootx() + (pw.winfo_width() - dlg.winfo_reqwidth()) // 2
+        y = pw.winfo_rooty() + (pw.winfo_height() - dlg.winfo_reqheight()) // 2
+        dlg.geometry(f'{dlg.winfo_reqwidth()}x{dlg.winfo_reqheight()}+{x}+{y}')
         dlg.resizable(False, False)
+        dlg.deiconify()
         dlg.grab_set()
-        dlg.lift()
-        dlg.focus_force()
 
         dlg.wait_window()
 
@@ -534,11 +535,13 @@ class RoutesPanel(tk.Frame):
         if not route:
             return
 
-        # Price entry dialog using wait_window (works reliably on Linux/Wayland)
+        # Price entry dialog — withdraw/deiconify to avoid zero-height window on Wayland
         result = [None]
-        dlg = tk.Toplevel(self, bg=BG2)
+        dlg = tk.Toplevel(self)
+        dlg.withdraw()
         dlg.title('Ticket Price')
-        dlg.resizable(False, False)
+        dlg.configure(bg=BG2)
+        dlg.transient(self.winfo_toplevel())
 
         tk.Label(dlg,
             text=f'Set ticket price for {rid}\n'
@@ -551,7 +554,6 @@ class RoutesPanel(tk.Frame):
                          insertbackground=TEXT, font=F_SMALL, width=10)
         entry.pack(padx=12, pady=4)
         entry.select_range(0, 'end')
-        entry.focus_set()
 
         def on_set():
             try:
@@ -569,6 +571,16 @@ class RoutesPanel(tk.Frame):
         btn_row.pack(pady=8)
         icon_btn(btn_row, 'Set Price', on_set, color=ACCENT, font=F_SMALL).pack(side='left', padx=4)
         icon_btn(btn_row, 'Cancel', dlg.destroy, color='#3a3a3a', font=F_SMALL).pack(side='left', padx=4)
+
+        dlg.update_idletasks()
+        pw = self.winfo_toplevel()
+        x = pw.winfo_rootx() + (pw.winfo_width() - dlg.winfo_reqwidth()) // 2
+        y = pw.winfo_rooty() + (pw.winfo_height() - dlg.winfo_reqheight()) // 2
+        dlg.geometry(f'{dlg.winfo_reqwidth()}x{dlg.winfo_reqheight()}+{x}+{y}')
+        dlg.resizable(False, False)
+        dlg.deiconify()
+        dlg.grab_set()
+        entry.focus_set()
 
         dlg.wait_window()
 
