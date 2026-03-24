@@ -380,7 +380,7 @@ class GameEngine:
                         s.total_pax += pax
                         pax_total += pax
                         owned.condition = max(
-                            0.3, owned.condition - random.uniform(0.0005, 0.002)
+                            0.3, owned.condition - random.uniform(0.0001, 0.0004)
                         )
                         owned.hours_flown += int(
                             (flight.arrive_day - flight.depart_day) * 24
