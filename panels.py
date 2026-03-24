@@ -242,18 +242,22 @@ class FleetPanel(tk.Frame):
             messagebox.showinfo('No Routes', 'Open some routes first in the Routes panel.', parent=self)
             return
 
-        # Route picker dialog using wait_window (works reliably on Linux/Wayland)
+        # Route picker dialog — withdraw first so the WM doesn't map an
+        # empty frame; build widgets while hidden, then deiconify.
         result = [None]
-        dlg = tk.Toplevel(self, bg=BG2)
+        dlg = tk.Toplevel(self)
+        dlg.withdraw()
         dlg.title('Assign Route')
-        dlg.resizable(False, False)
+        dlg.configure(bg=BG2)
+        dlg.transient(self.winfo_toplevel())
 
-        tk.Label(dlg, text='Select a route:', fg=TEXT1, bg=BG2, font=F_SMALL).pack(
+        tk.Label(dlg, text='Select a route:', fg=TEXT, bg=BG2, font=F_SMALL).pack(
             padx=12, pady=(10, 4), anchor='w')
 
-        lb = tk.Listbox(dlg, bg=BG3, fg=TEXT1, selectbackground=ACCENT,
-                        font=F_SMALL, height=min(len(self.state.routes), 12),
-                        activestyle='none')
+        lb = tk.Listbox(dlg, bg=BG3, fg=TEXT, selectbackground=ACCENT,
+                        font=F_SMALL, width=40,
+                        height=min(max(len(self.state.routes), 1), 12),
+                        activestyle='none', exportselection=0)
         for r in self.state.routes:
             lb.insert('end', f'{r.id}  —  {r.distance_km:.0f} km')
         lb.pack(padx=12, pady=4, fill='x')
@@ -269,6 +273,16 @@ class FleetPanel(tk.Frame):
         btn_row.pack(pady=8)
         icon_btn(btn_row, 'Assign', on_assign, color=ACCENT, font=F_SMALL).pack(side='left', padx=4)
         icon_btn(btn_row, 'Cancel', dlg.destroy, color='#3a3a3a', font=F_SMALL).pack(side='left', padx=4)
+
+        # Compute natural size while hidden, then show centred over parent
+        dlg.update_idletasks()
+        pw = self.winfo_toplevel()
+        x = pw.winfo_rootx() + (pw.winfo_width() - dlg.winfo_reqwidth()) // 2
+        y = pw.winfo_rooty() + (pw.winfo_height() - dlg.winfo_reqheight()) // 2
+        dlg.geometry(f'{dlg.winfo_reqwidth()}x{dlg.winfo_reqheight()}+{x}+{y}')
+        dlg.resizable(False, False)
+        dlg.deiconify()
+        dlg.grab_set()
 
         dlg.wait_window()
 
@@ -521,24 +535,25 @@ class RoutesPanel(tk.Frame):
         if not route:
             return
 
-        # Price entry dialog using wait_window (works reliably on Linux/Wayland)
+        # Price entry dialog — withdraw/deiconify to avoid zero-height window on Wayland
         result = [None]
-        dlg = tk.Toplevel(self, bg=BG2)
+        dlg = tk.Toplevel(self)
+        dlg.withdraw()
         dlg.title('Ticket Price')
-        dlg.resizable(False, False)
+        dlg.configure(bg=BG2)
+        dlg.transient(self.winfo_toplevel())
 
         tk.Label(dlg,
             text=f'Set ticket price for {rid}\n'
                  f'Current: ${route.ticket_price:.0f}  ·  Distance: {route.distance_km:.0f} km\n'
                  f'Lower prices attract more passengers.',
-            fg=TEXT1, bg=BG2, font=F_SMALL, justify='left').pack(padx=12, pady=(10, 6))
+            fg=TEXT, bg=BG2, font=F_SMALL, justify='left').pack(padx=12, pady=(10, 6))
 
         entry_var = tk.StringVar(value=str(int(route.ticket_price)))
-        entry = tk.Entry(dlg, textvariable=entry_var, bg=BG3, fg=TEXT1,
-                         insertbackground=TEXT1, font=F_SMALL, width=10)
+        entry = tk.Entry(dlg, textvariable=entry_var, bg=BG3, fg=TEXT,
+                         insertbackground=TEXT, font=F_SMALL, width=10)
         entry.pack(padx=12, pady=4)
         entry.select_range(0, 'end')
-        entry.focus_set()
 
         def on_set():
             try:
@@ -556,6 +571,16 @@ class RoutesPanel(tk.Frame):
         btn_row.pack(pady=8)
         icon_btn(btn_row, 'Set Price', on_set, color=ACCENT, font=F_SMALL).pack(side='left', padx=4)
         icon_btn(btn_row, 'Cancel', dlg.destroy, color='#3a3a3a', font=F_SMALL).pack(side='left', padx=4)
+
+        dlg.update_idletasks()
+        pw = self.winfo_toplevel()
+        x = pw.winfo_rootx() + (pw.winfo_width() - dlg.winfo_reqwidth()) // 2
+        y = pw.winfo_rooty() + (pw.winfo_height() - dlg.winfo_reqheight()) // 2
+        dlg.geometry(f'{dlg.winfo_reqwidth()}x{dlg.winfo_reqheight()}+{x}+{y}')
+        dlg.resizable(False, False)
+        dlg.deiconify()
+        dlg.grab_set()
+        entry.focus_set()
 
         dlg.wait_window()
 
