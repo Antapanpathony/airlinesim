@@ -246,9 +246,7 @@ class FleetPanel(tk.Frame):
         result = [None]
         dlg = tk.Toplevel(self, bg=BG2)
         dlg.title('Assign Route')
-        dlg.resizable(False, False)
         dlg.transient(self.winfo_toplevel())
-        dlg.grab_set()
 
         tk.Label(dlg, text='Select a route:', fg=TEXT, bg=BG2, font=F_SMALL).pack(
             padx=12, pady=(10, 4), anchor='w')
@@ -273,12 +271,17 @@ class FleetPanel(tk.Frame):
         icon_btn(btn_row, 'Assign', on_assign, color=ACCENT, font=F_SMALL).pack(side='left', padx=4)
         icon_btn(btn_row, 'Cancel', dlg.destroy, color='#3a3a3a', font=F_SMALL).pack(side='left', padx=4)
 
-        # Force geometry calculation then centre over parent
-        dlg.update_idletasks()
+        # update() (not just update_idletasks) forces the compositor to map the
+        # window and calculate real geometry before we read winfo_width/height
+        dlg.update()
         pw = self.winfo_toplevel()
         x = pw.winfo_rootx() + (pw.winfo_width() - dlg.winfo_width()) // 2
         y = pw.winfo_rooty() + (pw.winfo_height() - dlg.winfo_height()) // 2
         dlg.geometry(f'+{x}+{y}')
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.lift()
+        dlg.focus_force()
 
         dlg.wait_window()
 
