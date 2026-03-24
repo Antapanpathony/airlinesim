@@ -253,7 +253,7 @@ class FleetPanel(tk.Frame):
 
         lb = tk.Listbox(dlg, bg=BG3, fg=TEXT, selectbackground=ACCENT,
                         font=F_SMALL, height=min(len(self.state.routes), 12),
-                        activestyle='none')
+                        activestyle='none', exportselection=0)
         for r in self.state.routes:
             lb.insert('end', f'{r.id}  —  {r.distance_km:.0f} km')
         lb.pack(padx=12, pady=4, fill='x')
