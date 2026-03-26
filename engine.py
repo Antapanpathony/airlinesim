@@ -332,7 +332,8 @@ class GameEngine:
 
         # Airport fees: departure charge at origin + landing charge at destination.
         # Rates ($/pax) scale with hub tier so big airports cost more.
-        _tier_rate = {1: 2.00, 2: 1.20, 3: 0.60}
+        # Kept small so they're realistic flavour without punishing short-haul.
+        _tier_rate = {1: 0.10, 2: 0.06, 3: 0.03}
         origin_code = route.origin if going else route.dest
         dest_code   = route.dest   if going else route.origin
         origin_city = CITY_DICT.get(origin_code)
@@ -494,11 +495,11 @@ def new_game(name: str, hub: str, start_year: int, difficulty: str) -> GameState
     # Starting cash scales with the era so 1903 pioneers start small and
     # 2000s operators start with the capital their era demands.
     # Multiplier is applied to the starter aircraft's purchase price:
-    #   easy=5x  →  you can comfortably buy 4 more planes
-    #   normal=2.5x → 1-2 extra planes plus a cash buffer
-    #   hard=1.2x   → barely one more plane; must earn growth
-    #   tycoon=0.6x → can't even buy a second plane outright
-    _difficulty_mult = {'easy': 5.0, 'normal': 2.5, 'hard': 1.2, 'tycoon': 0.6}
+    #   easy=50x   →  very generous; plenty of room to experiment
+    #   normal=20x →  comfortable; a solid starting fleet
+    #   hard=8x    →  lean but workable
+    #   tycoon=3x  →  tight; must earn growth quickly
+    _difficulty_mult = {'easy': 50.0, 'normal': 20.0, 'hard': 8.0, 'tycoon': 3.0}
 
     # Starting aircraft gift based on era
     starters = {
