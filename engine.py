@@ -57,6 +57,7 @@ class ActiveFlight:
     arrive_day: float     # game_day when it lands
     revenue: float        # revenue (dollars) earned on arrival
     going: bool = True    # True = origin→dest, False = dest→origin
+    airport_fees: float = 0.0  # take-off + landing charges (dollars)
 
 
 @dataclass
@@ -329,6 +330,17 @@ class GameEngine:
         yield_adj = 0.8 + load_factor * 0.4
         revenue = pax * route.ticket_price * yield_adj  # exact dollars
 
+        # Airport fees: departure charge at origin + landing charge at destination.
+        # Rates ($/pax) scale with hub tier so big airports cost more.
+        _tier_rate = {1: 2.00, 2: 1.20, 3: 0.60}
+        origin_code = route.origin if going else route.dest
+        dest_code   = route.dest   if going else route.origin
+        origin_city = CITY_DICT.get(origin_code)
+        dest_city   = CITY_DICT.get(dest_code)
+        origin_rate = _tier_rate.get(origin_city.hub_tier if origin_city else 2, 1.20)
+        dest_rate   = _tier_rate.get(dest_city.hub_tier   if dest_city   else 2, 1.20)
+        airport_fees = pax * (origin_rate + dest_rate)
+
         s.active_flights.append(ActiveFlight(
             serial=owned.serial,
             route_id=route.id,
@@ -336,6 +348,7 @@ class GameEngine:
             arrive_day=arrive_day,
             revenue=revenue,
             going=going,
+            airport_fees=airport_fees,
         ))
 
     # ── Real-time tick ─────────────────────────────────────────────────────────
@@ -367,6 +380,11 @@ class GameEngine:
                 revenue += flight.revenue
                 s.total_revenue += flight.revenue
                 s._period_revenue += flight.revenue
+                # Airport fees (departure + landing charges)
+                s.cash -= flight.airport_fees
+                costs += flight.airport_fees
+                s.total_costs += flight.airport_fees
+                s._period_costs += flight.airport_fees
 
                 owned = s.get_owned(flight.serial)
                 route = s.get_route(flight.route_id)
@@ -473,19 +491,15 @@ class GameEngine:
 
 
 def new_game(name: str, hub: str, start_year: int, difficulty: str) -> GameState:
-    budgets = {'easy': 25_000_000, 'normal': 10_000_000, 'hard': 5_000_000, 'tycoon': 2_000_000}
-    cash = budgets.get(difficulty, 10_000_000)
-    s = GameState(
-        airline_name=name,
-        hub_code=hub,
-        start_year=start_year,
-        year=start_year,
-        month=1,
-        day=1,
-        game_day=0.0,
-        cash=cash,
-        reputation=40.0,
-    )
+    # Starting cash scales with the era so 1903 pioneers start small and
+    # 2000s operators start with the capital their era demands.
+    # Multiplier is applied to the starter aircraft's purchase price:
+    #   easy=5x  →  you can comfortably buy 4 more planes
+    #   normal=2.5x → 1-2 extra planes plus a cash buffer
+    #   hard=1.2x   → barely one more plane; must earn growth
+    #   tycoon=0.6x → can't even buy a second plane outright
+    _difficulty_mult = {'easy': 5.0, 'normal': 2.5, 'hard': 1.2, 'tycoon': 0.6}
+
     # Starting aircraft gift based on era
     starters = {
         range(1900, 1920): 'benoist',
@@ -506,6 +520,21 @@ def new_game(name: str, hub: str, start_year: int, difficulty: str) -> GameState
             break
 
     ac = get_aircraft(starter_id)
+    starter_cost = int((ac.cost_m if ac else 10.0) * 1_000_000)
+    mult = _difficulty_mult.get(difficulty, 2.5)
+    cash = int(starter_cost * mult)
+
+    s = GameState(
+        airline_name=name,
+        hub_code=hub,
+        start_year=start_year,
+        year=start_year,
+        month=1,
+        day=1,
+        game_day=0.0,
+        cash=cash,
+        reputation=40.0,
+    )
     if ac:
         owned = OwnedAircraft(
             ac_id=starter_id,
