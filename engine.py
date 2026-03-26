@@ -495,11 +495,11 @@ def new_game(name: str, hub: str, start_year: int, difficulty: str) -> GameState
     # Starting cash scales with the era so 1903 pioneers start small and
     # 2000s operators start with the capital their era demands.
     # Multiplier is applied to the starter aircraft's purchase price:
-    #   easy=20x   →  very comfortable; ~19 more planes to buy right away
-    #   normal=8x  →  relaxed; 7 extra planes worth of headroom
-    #   hard=3x    →  tight; afford 2 more planes, then earn growth
-    #   tycoon=1x  →  just enough to buy one more starter plane
-    _difficulty_mult = {'easy': 20.0, 'normal': 8.0, 'hard': 3.0, 'tycoon': 1.0}
+    #   easy=50x   →  very generous; plenty of room to experiment
+    #   normal=20x →  comfortable; a solid starting fleet
+    #   hard=8x    →  lean but workable
+    #   tycoon=3x  →  tight; must earn growth quickly
+    _difficulty_mult = {'easy': 50.0, 'normal': 20.0, 'hard': 8.0, 'tycoon': 3.0}
 
     # Starting aircraft gift based on era
     starters = {
