@@ -1,10 +1,11 @@
-"""Game panels: Fleet, Routes, Finance, Events"""
+"""Game panels: Fleet, Routes, Finance, Events, Research"""
 import tkinter as tk
 from tkinter import ttk, messagebox
 import math
 from ui_theme import *
 from data import AIRCRAFT_DB, CITY_DICT, CITIES, get_aircraft, available_aircraft
-from engine import GameEngine
+from engine import (GameEngine, RESEARCH_PROJECTS, CABIN_MULTIPLIERS,
+                    CABIN_DISPLAY_NAMES, CABIN_DEMAND_FRACTIONS, CABIN_SEAT_SIZES)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FLEET PANEL
@@ -15,6 +16,8 @@ class FleetPanel(tk.Frame):
         self.state = state
         self.engine = engine
         self.refresh_cb = refresh_cb
+        self._hidden_aircraft: set = set()   # aircraft ids hidden from the market
+        self._show_hidden = False
         self._build()
 
     def _build(self):
@@ -24,11 +27,11 @@ class FleetPanel(tk.Frame):
         tk.Label(left, text='YOUR FLEET', fg=GOLD, bg=BG2, font=F_SUBHEAD).pack(
             anchor='w', padx=12, pady=(10, 4))
 
-        cols = ('name','type','pax','range','condition','route','age')
+        cols = ('name','type','cabin','range','condition','route','age')
         self._fleet_tree = ttk.Treeview(left, columns=cols, show='headings',
                                          selectmode='browse', style='Treeview')
-        hdrs = [('name','Aircraft',180),('type','Class',75),
-                ('pax','Seats',50),('range','Range',90),
+        hdrs = [('name','Aircraft',180),('type','Class',65),
+                ('cabin','Cabin Layout',120),('range','Range',90),
                 ('condition','Cond.',60),('route','Route',90),('age','Age',40)]
         for col, hdr, w in hdrs:
             self._fleet_tree.heading(col, text=hdr)
@@ -42,6 +45,10 @@ class FleetPanel(tk.Frame):
                  color=ACCENT, font=F_SMALL).pack(side='left', padx=2)
         icon_btn(btn_row, '⬛  Remove from Route', self._remove_route,
                  color='#1a3050', font=F_SMALL).pack(side='left', padx=2)
+        icon_btn(btn_row, '🪑  Configure Cabin', self._configure_cabin,
+                 color='#1a4a2a', font=F_SMALL).pack(side='left', padx=2)
+        icon_btn(btn_row, '💛  Toggle Budget', self._toggle_budget,
+                 color='#4a3a00', font=F_SMALL).pack(side='left', padx=2)
         icon_btn(btn_row, '💰  Sell Aircraft', self._sell_aircraft,
                  color='#5a1a1a', font=F_SMALL).pack(side='left', padx=2)
 
@@ -81,6 +88,12 @@ class FleetPanel(tk.Frame):
                              state='readonly', font=F_SMALL)
         cats.pack(side='left', padx=4)
         cats.bind('<<ComboboxSelected>>', lambda e: self._populate_market())
+        self._hide_btn = icon_btn(filt, '🙈 Hide', self._hide_selected,
+                                  color='#3a3a3a', font=F_SMALL, padx=6, pady=2)
+        self._hide_btn.pack(side='left', padx=(8, 2))
+        self._show_hidden_btn = icon_btn(filt, 'Show Hidden', self._toggle_show_hidden,
+                                         color=MUTED, font=F_SMALL, padx=6, pady=2)
+        self._show_hidden_btn.pack(side='left', padx=2)
 
         cols2 = ('name','year','pax','range','speed','cost')
         self._market_tree = ttk.Treeview(right, columns=cols2, show='headings',
@@ -93,6 +106,7 @@ class FleetPanel(tk.Frame):
             self._market_tree.column(col, width=w, anchor='center')
         self._market_tree.column('name', anchor='w')
         self._market_tree.bind('<<TreeviewSelect>>', self._on_market_select)
+        self._market_tree.bind('<Button-3>', self._on_market_right_click)
 
         sb2 = ttk.Scrollbar(right, orient='vertical', command=self._market_tree.yview)
         self._market_tree.configure(yscrollcommand=sb2.set)
@@ -116,15 +130,24 @@ class FleetPanel(tk.Frame):
         for owned in self.state.fleet:
             ac = get_aircraft(owned.ac_id)
             cat = ac.category if ac else '?'
-            pax = ac.passengers if ac else '?'
             rng = f'{ac.range_km:,}km' if ac else '?'
             cond = f'{owned.condition*100:.0f}%'
             route = owned.assigned_route or '—'
             age = self.state.year - owned.year_acquired
+            # Cabin layout summary: e.g. "💛E320 / B24 / F8" (💛 = budget mode)
+            cabin = owned.cabin_config or ({'economy': ac.passengers} if ac else {})
+            _short = {'economy': 'E', 'premium_economy': 'P', 'business': 'B',
+                      'first': 'F', 'supersonic_first': 'S'}
+            cabin_str = ' / '.join(
+                f'{_short.get(cls, cls[0].upper())}{seats}'
+                for cls, seats in cabin.items() if seats > 0
+            ) or '—'
+            if owned.is_budget:
+                cabin_str = '💛 ' + cabin_str
             tag = 'good' if owned.condition > 0.7 else ('warn' if owned.condition > 0.4 else 'bad')
             self._fleet_tree.insert('', 'end',
                 iid=str(owned.serial),
-                values=(owned.name, cat, pax, rng, cond, route, age),
+                values=(owned.name, cat, cabin_str, rng, cond, route, age),
                 tags=(tag,))
         self._fleet_tree.tag_configure('good', foreground=TEXT)
         self._fleet_tree.tag_configure('warn', foreground=ORANGE)
@@ -133,16 +156,74 @@ class FleetPanel(tk.Frame):
             if self._fleet_tree.exists(iid):
                 self._fleet_tree.selection_set(iid)
 
+    @staticmethod
+    def _retirement_year(ac) -> int:
+        """Estimate the year a type was taken out of new production."""
+        # Pioneer/regional props: short production run
+        if ac.category == 'pioneer':
+            return ac.year + 20
+        if ac.category in ('regional', 'narrow', 'wide') and ac.year < 1950:
+            return ac.year + 30
+        if ac.year < 1970:
+            return ac.year + 40
+        if ac.year < 1990:
+            return ac.year + 45
+        return 9999  # modern types still in production
+
+    def _hide_selected(self):
+        sel = self._market_tree.selection()
+        if sel:
+            self._hidden_aircraft.add(sel[0])
+            self._populate_market()
+
+    def _toggle_show_hidden(self):
+        self._show_hidden = not self._show_hidden
+        self._show_hidden_btn.config(
+            text='Hide Hidden' if self._show_hidden else 'Show Hidden',
+            bg=ACCENT if self._show_hidden else MUTED)
+        self._populate_market()
+
+    def _on_market_right_click(self, event):
+        row = self._market_tree.identify_row(event.y)
+        if not row:
+            return
+        self._market_tree.selection_set(row)
+        menu = tk.Menu(self, tearoff=0, bg=BG2, fg=TEXT,
+                       activebackground=SEL, activeforeground=WHITE)
+        if row in self._hidden_aircraft:
+            menu.add_command(label='Unhide aircraft',
+                             command=lambda: (self._hidden_aircraft.discard(row),
+                                              self._populate_market()))
+        else:
+            menu.add_command(label='Hide aircraft',
+                             command=lambda: (self._hidden_aircraft.add(row),
+                                              self._populate_market()))
+        menu.tk_popup(event.x_root, event.y_root)
+
     def _populate_market(self):
         sel = self._market_tree.selection()
         for item in self._market_tree.get_children():
             self._market_tree.delete(item)
         cat_filter = self._cat_var.get()
+        year = self.state.year
         for ac in AIRCRAFT_DB:
             if cat_filter != 'All' and ac.category != cat_filter:
                 continue
-            avail = ac.year <= self.state.year
-            tag = 'avail' if avail else 'future'
+            retired = self._retirement_year(ac) < year
+            hidden = ac.id in self._hidden_aircraft
+            # Retired planes: skip entirely (out of production)
+            if retired:
+                continue
+            # Hidden planes: skip unless showing hidden
+            if hidden and not self._show_hidden:
+                continue
+            avail = ac.year <= year
+            if hidden:
+                tag = 'hidden'
+            elif avail:
+                tag = 'avail'
+            else:
+                tag = 'future'
             yr_str = str(ac.year) if not avail else '✓'
             speed_str = f'M{ac.speed_kmh/1225:.1f}' if ac.speed_kmh > 1200 else f'{ac.speed_kmh}km/h'
             self._market_tree.insert('', 'end', iid=ac.id,
@@ -152,6 +233,7 @@ class FleetPanel(tk.Frame):
                 tags=(tag,))
         self._market_tree.tag_configure('avail',  foreground=TEXT)
         self._market_tree.tag_configure('future', foreground=MUTED)
+        self._market_tree.tag_configure('hidden', foreground='#5a3a5a')
         for iid in sel:
             if self._market_tree.exists(iid):
                 self._market_tree.selection_set(iid)
@@ -209,21 +291,33 @@ class FleetPanel(tk.Frame):
                 parent=self)
             return
 
-        monthly = int(ac.monthly_cost_k * 1000)
-        confirmed = messagebox.askyesno('Confirm Purchase',
-            f'Purchase {ac.name}?\n\n'
-            f'  Cost:            {money_str(cost)}\n'
-            f'  Cash after:   {money_str(cash_after)}\n'
-            f'  Monthly ops: {money_str(monthly)}/mo\n'
-            f'  Seats:           {ac.passengers}  ·  Range: {ac.range_km:,} km',
-            parent=self)
+        # Skip confirmation dialog on Easy and Normal difficulty
+        diff = getattr(self.state, 'difficulty', 'normal')
+        if diff in ('easy', 'normal'):
+            confirmed = True
+        else:
+            monthly = int(ac.monthly_cost_k * 1000)
+            confirmed = messagebox.askyesno('Confirm Purchase',
+                f'Purchase {ac.name}?\n\n'
+                f'  Cost:            {money_str(cost)}\n'
+                f'  Cash after:   {money_str(cash_after)}\n'
+                f'  Monthly ops: {money_str(monthly)}/mo\n'
+                f'  Seats:           {ac.passengers}  ·  Range: {ac.range_km:,} km',
+                parent=self)
 
         if confirmed:
             ok, msg = self.engine.buy_aircraft(ac)
             if ok:
+                # Find the just-purchased aircraft (last in fleet)
+                new_owned = self.state.fleet[-1] if self.state.fleet else None
                 if self.refresh_cb:
                     self.refresh_cb()
                 self.refresh()
+                # If premium cabins are unlocked, offer cabin configuration right away
+                if new_owned and len(self.engine.unlocked_cabin_classes()) > 1:
+                    # Temporarily set selection so _configure_cabin works
+                    self._fleet_tree.selection_set(str(new_owned.serial))
+                    self._configure_cabin()
             else:
                 messagebox.showerror('Cannot Purchase', msg, parent=self)
 
@@ -306,6 +400,18 @@ class FleetPanel(tk.Frame):
         else:
             messagebox.showwarning('Cannot Remove', msg, parent=self)
 
+    def _toggle_budget(self):
+        serial = self._get_selected_serial()
+        if serial is None:
+            return
+        ok, msg = self.engine.toggle_budget(serial)
+        if ok:
+            self.refresh()
+            if self.refresh_cb:
+                self.refresh_cb()
+        else:
+            messagebox.showwarning('Budget Mode', msg, parent=self)
+
     def _sell_aircraft(self):
         serial = self._get_selected_serial()
         if serial is None:
@@ -323,6 +429,155 @@ class FleetPanel(tk.Frame):
             self.refresh()
         else:
             messagebox.showerror('Cannot Sell', msg, parent=self)
+
+    def _configure_cabin(self):
+        serial = self._get_selected_serial()
+        if serial is None:
+            return
+        owned = self.state.get_owned(serial)
+        if not owned:
+            return
+        ac = get_aircraft(owned.ac_id)
+        if not ac:
+            return
+
+        unlocked = self.engine.unlocked_cabin_classes()
+        capacity = ac.passengers
+        current = owned.cabin_config or {'economy': capacity}
+
+        dlg = tk.Toplevel(self)
+        dlg.withdraw()
+        dlg.title(f'Cabin Configuration — {owned.name}')
+        dlg.configure(bg=BG2)
+        dlg.transient(self.winfo_toplevel())
+        dlg.resizable(False, False)
+
+        tk.Label(dlg, text=f'Configure cabin for {owned.name}',
+                 fg=GOLD, bg=BG2, font=F_SUBHEAD).pack(padx=16, pady=(12, 2))
+        tk.Label(dlg,
+                 text=f'Aircraft has {capacity} seat-units of space.\n'
+                      f'PE=1.5×, Business=2.5×, First=4× the space of Economy.',
+                 fg=TEXT2, bg=BG2, font=F_SMALL, justify='left').pack(padx=16, pady=(0, 8))
+
+        # Class rows
+        _class_order = ['economy', 'premium_economy', 'business', 'first', 'supersonic_first']
+        _class_colors = {
+            'economy': TEXT2,
+            'premium_economy': ACCENT2,
+            'business': GOLD,
+            'first': '#d4a0e8',
+            'supersonic_first': RED,
+        }
+        vars_map: dict = {}
+
+        grid = tk.Frame(dlg, bg=BG2)
+        grid.pack(padx=16, pady=4, fill='x')
+
+        header_cols = ['Cabin Class', 'Seats', 'Revenue Mult.', 'Status']
+        for c, h in enumerate(header_cols):
+            tk.Label(grid, text=h, fg=MUTED, bg=BG2, font=F_SMALL).grid(
+                row=0, column=c, padx=8, pady=2, sticky='w')
+
+        for row_i, cls in enumerate(_class_order, start=1):
+            is_unlocked = cls in unlocked
+            is_supersonic_only = cls == 'supersonic_first'
+            is_applicable = is_unlocked and (not is_supersonic_only or ac.category == 'supersonic')
+
+            color = _class_colors.get(cls, TEXT)
+            name = CABIN_DISPLAY_NAMES.get(cls, cls)
+            mult = CABIN_MULTIPLIERS.get(cls, 1.0)
+
+            tk.Label(grid, text=name, fg=color if is_applicable else MUTED,
+                     bg=BG2, font=F_SMALL, width=18, anchor='w').grid(
+                row=row_i, column=0, padx=8, pady=3, sticky='w')
+
+            var = tk.IntVar(value=current.get(cls, 0) if is_applicable else 0)
+            vars_map[cls] = var
+            max_for_class = int(capacity / CABIN_SEAT_SIZES.get(cls, 1.0))
+            spin = tk.Spinbox(grid, from_=0, to=max_for_class, textvariable=var,
+                              width=6, bg=BG3, fg=color if is_applicable else MUTED,
+                              buttonbackground=BG3, insertbackground=TEXT,
+                              font=F_SMALL, state='normal' if is_applicable else 'disabled',
+                              relief='flat')
+            spin.grid(row=row_i, column=1, padx=8, pady=3)
+
+            tk.Label(grid, text=f'{mult:.1f}×', fg=color if is_applicable else MUTED,
+                     bg=BG2, font=F_SMALL).grid(row=row_i, column=2, padx=8, pady=3)
+
+            if not is_unlocked:
+                status = '🔒 Research required'
+            elif is_supersonic_only and ac.category != 'supersonic':
+                status = '🚀 Supersonic only'
+            else:
+                status = '✅ Available'
+            tk.Label(grid, text=status, fg=MUTED if not is_applicable else GREEN,
+                     bg=BG2, font=F_SMALL).grid(row=row_i, column=3, padx=8, pady=3, sticky='w')
+
+        # Total indicator
+        sep_frame = tk.Frame(dlg, bg=BORDER, height=1)
+        sep_frame.pack(fill='x', padx=16, pady=4)
+
+        total_lbl = tk.Label(dlg, text='', fg=TEXT, bg=BG2, font=F_SMALL)
+        total_lbl.pack(padx=16, pady=2)
+
+        def _safe_get(var):
+            try:
+                return max(0, int(var.get()))
+            except (tk.TclError, ValueError):
+                return 0
+
+        def update_total(*_):
+            units = sum(_safe_get(v) * CABIN_SEAT_SIZES.get(cls, 1.0)
+                        for cls, v in vars_map.items())
+            remaining = capacity - units
+            if units > capacity:
+                total_lbl.config(
+                    text=f'⚠  Space used: {units:.0f} / {capacity}  — {units-capacity:.0f} over limit!',
+                    fg=RED)
+            elif remaining > 0.5:
+                total_lbl.config(
+                    text=f'Space used: {units:.0f} / {capacity}  — {remaining:.0f} units → Economy',
+                    fg=ORANGE)
+            else:
+                total_lbl.config(text=f'Space used: {units:.0f} / {capacity}  ✓', fg=GREEN)
+
+        for var in vars_map.values():
+            var.trace_add('write', update_total)
+        update_total()
+
+        def on_save():
+            config = {cls: _safe_get(v) for cls, v in vars_map.items()}
+            # Fill remaining space with economy seats
+            used_units = sum(v * CABIN_SEAT_SIZES.get(c, 1.0) for c, v in config.items())
+            leftover_units = capacity - used_units
+            if leftover_units >= 1.0:
+                config['economy'] = config.get('economy', 0) + int(leftover_units)
+            if config.get('economy', 0) < 0:
+                config['economy'] = 0
+            ok, msg = self.engine.configure_cabin(serial, config)
+            if ok:
+                dlg.destroy()
+                self.refresh()
+                if self.refresh_cb:
+                    self.refresh_cb()
+            else:
+                messagebox.showerror('Invalid Configuration', msg, parent=dlg)
+
+        btn_row = tk.Frame(dlg, bg=BG2)
+        btn_row.pack(pady=10)
+        icon_btn(btn_row, '💾  Save Configuration', on_save,
+                 color=GREEN, font=F_SMALL).pack(side='left', padx=4)
+        icon_btn(btn_row, 'Cancel', dlg.destroy,
+                 color='#3a3a3a', font=F_SMALL).pack(side='left', padx=4)
+
+        dlg.update_idletasks()
+        pw = self.winfo_toplevel()
+        x = pw.winfo_rootx() + (pw.winfo_width() - dlg.winfo_reqwidth()) // 2
+        y = pw.winfo_rooty() + (pw.winfo_height() - dlg.winfo_reqheight()) // 2
+        dlg.geometry(f'{dlg.winfo_reqwidth()}x{dlg.winfo_reqheight()}+{x}+{y}')
+        dlg.deiconify()
+        dlg.grab_set()
+        dlg.wait_window()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -343,34 +598,24 @@ class RoutesPanel(tk.Frame):
         top = tk.Frame(self, bg=BG3)
         top.pack(fill='x', padx=8, pady=8)
 
-        tk.Label(top, text='OPEN NEW ROUTE', fg=GOLD, bg=BG3, font=F_SUBHEAD).grid(
-            row=0, column=0, columnspan=6, sticky='w', padx=10, pady=(8,4))
+        tk.Label(top, text='OPEN NEW ROUTE', fg=GOLD, bg=BG3, font=F_SUBHEAD).pack(
+            anchor='w', padx=10, pady=(8, 4))
 
-        tk.Label(top, text='Origin:', fg=TEXT2, bg=BG3, font=F_SMALL).grid(
-            row=1, column=0, padx=(10,2), pady=4)
-        self._orig_var = tk.StringVar()
-        orig_cb = ttk.Combobox(top, textvariable=self._orig_var, width=10,
-                                values=sorted([c.code for c in CITIES]),
-                                state='readonly', font=F_SMALL)
-        orig_cb.grid(row=1, column=1, padx=2, pady=4)
+        # Dynamic stop list
+        self._stop_vars = [tk.StringVar(), tk.StringVar()]
+        self._stops_frame = tk.Frame(top, bg=BG3)
+        self._stops_frame.pack(fill='x', padx=10, pady=2)
+        self._render_stops()
 
-        tk.Label(top, text='→', fg=ACCENT2, bg=BG3, font=F_HEAD).grid(
-            row=1, column=2, padx=4)
+        btn_row = tk.Frame(top, bg=BG3)
+        btn_row.pack(anchor='w', padx=10, pady=(4, 6))
+        icon_btn(btn_row, '➕ Add Stop', self._add_stop,
+                 color=ACCENT, font=F_SMALL, padx=8, pady=3).pack(side='left', padx=(0, 6))
+        icon_btn(btn_row, '✈  Open Route', self._open_route,
+                 color=GREEN, font=F_SMALL, padx=10, pady=3).pack(side='left')
 
-        tk.Label(top, text='Dest:', fg=TEXT2, bg=BG3, font=F_SMALL).grid(
-            row=1, column=3, padx=(2,2), pady=4)
-        self._dest_var = tk.StringVar()
-        dest_cb = ttk.Combobox(top, textvariable=self._dest_var, width=10,
-                                values=sorted([c.code for c in CITIES]),
-                                state='readonly', font=F_SMALL)
-        dest_cb.grid(row=1, column=4, padx=2, pady=4)
-
-        icon_btn(top, '➕  Open Route', self._open_route,
-                 color=GREEN, font=F_SMALL).grid(row=1, column=5, padx=10, pady=4)
-
-        tk.Label(top, text='💡 Tip: Click cities on the map to auto-fill origin/destination',
-                 fg=MUTED, bg=BG3, font=F_SMALL).grid(
-                 row=2, column=0, columnspan=6, sticky='w', padx=10, pady=(0,6))
+        tk.Label(top, text='💡 Tip: Click cities on the map to auto-fill stops',
+                 fg=MUTED, bg=BG3, font=F_SMALL).pack(anchor='w', padx=10, pady=(0, 6))
 
         # Route list
         tk.Label(self, text='YOUR ROUTES', fg=GOLD, bg=BG2, font=F_SUBHEAD).pack(
@@ -379,28 +624,27 @@ class RoutesPanel(tk.Frame):
         frame = tk.Frame(self, bg=BG2)
         frame.pack(fill='both', expand=True, padx=8, pady=4)
 
-        cols = ('id','origin','dest','dist','aircraft','weekly_pax','ticket','rev_trip','status')
+        cols = ('stops', 'dist', 'legs', 'aircraft', 'weekly_pax', 'ticket', 'rev_trip', 'status')
         self._tree = ttk.Treeview(frame, columns=cols, show='headings',
                                    selectmode='browse', style='Treeview')
-        hdrs = [('id','Route',100),('origin','From',55),('dest','To',55),
-                ('dist','Distance',90),('aircraft','Aircraft',60),
-                ('weekly_pax','Wk Pax',70),('ticket','Ticket',70),
-                ('rev_trip','Rev/Trip',90),('status','Status',80)]
+        hdrs = [('stops', 'Route', 200), ('dist', 'Distance', 90), ('legs', 'Legs', 45),
+                ('aircraft', 'Aircraft', 60), ('weekly_pax', 'Wk Pax', 70),
+                ('ticket', 'Ticket', 70), ('rev_trip', 'Rev/Trip', 90), ('status', 'Status', 80)]
         for col, hdr, w in hdrs:
             self._tree.heading(col, text=hdr)
             self._tree.column(col, width=w, anchor='center')
-        self._tree.column('id', anchor='w')
+        self._tree.column('stops', anchor='w')
 
         sb = ttk.Scrollbar(frame, orient='vertical', command=self._tree.yview)
         self._tree.configure(yscrollcommand=sb.set)
         self._tree.pack(side='left', fill='both', expand=True)
         sb.pack(side='right', fill='y')
 
-        btn_row = tk.Frame(self, bg=BG2)
-        btn_row.pack(fill='x', padx=8, pady=4)
-        icon_btn(btn_row, '💰  Set Ticket Price', self._set_price,
+        route_btn_row = tk.Frame(self, bg=BG2)
+        route_btn_row.pack(fill='x', padx=8, pady=4)
+        icon_btn(route_btn_row, '💰  Set Ticket Price', self._set_price,
                  color=ACCENT, font=F_SMALL).pack(side='left', padx=2)
-        icon_btn(btn_row, '🗑  Close Route', self._close_route,
+        icon_btn(route_btn_row, '🗑  Close Route', self._close_route,
                  color='#5a1a1a', font=F_SMALL).pack(side='left', padx=2)
 
         # Assigned planes sub-list
@@ -430,15 +674,43 @@ class RoutesPanel(tk.Frame):
 
         self.refresh()
 
+    def _render_stops(self):
+        for w in self._stops_frame.winfo_children():
+            w.destroy()
+        city_codes = sorted([c.code for c in CITIES])
+        for i, sv in enumerate(self._stop_vars):
+            row = tk.Frame(self._stops_frame, bg=BG3)
+            row.pack(anchor='w', pady=1)
+            if i > 0:
+                tk.Label(row, text='→', fg=ACCENT2, bg=BG3, font=F_SUBHEAD).pack(
+                    side='left', padx=(0, 4))
+            else:
+                tk.Label(row, text='   ', bg=BG3).pack(side='left')  # indent align
+            ttk.Combobox(row, textvariable=sv, width=10, values=city_codes,
+                         state='readonly', font=F_SMALL).pack(side='left', padx=2)
+            if len(self._stop_vars) > 2:
+                def _make_remove(idx=i):
+                    def _remove():
+                        self._stop_vars.pop(idx)
+                        self._render_stops()
+                    return _remove
+                icon_btn(row, '✕', _make_remove(), color='#5a1a1a',
+                         font=F_SMALL, padx=5, pady=1).pack(side='left', padx=3)
+
+    def _add_stop(self):
+        if len(self._stop_vars) < 8:
+            self._stop_vars.append(tk.StringVar())
+            self._render_stops()
+
     def set_city(self, city_code: str):
-        """Called from map click to fill origin/dest fields."""
-        if not self._orig_var.get():
-            self._orig_var.set(city_code)
-        elif not self._dest_var.get():
-            self._dest_var.set(city_code)
-        else:
-            self._orig_var.set(city_code)
-            self._dest_var.set('')
+        """Called from map click — fills next empty stop slot, or appends a new one."""
+        for sv in self._stop_vars:
+            if not sv.get():
+                sv.set(city_code)
+                return
+        if len(self._stop_vars) < 8:
+            self._stop_vars.append(tk.StringVar(value=city_code))
+            self._render_stops()
 
     def refresh(self):
         sel = self._tree.selection()  # preserve selection across refresh
@@ -449,9 +721,10 @@ class RoutesPanel(tk.Frame):
             status = '🟢 Active' if n_ac > 0 else '🔴 No AC'
             tag = 'active' if n_ac > 0 else 'idle'
             rev_str = money_str(route.last_revenue) if route.last_revenue > 0 else '—'
+            stops_str = '→'.join(route.stops)
             self._tree.insert('', 'end', iid=route.id,
-                values=(route.id, route.origin, route.dest,
-                        f'{route.distance_km:,.0f}km', n_ac,
+                values=(stops_str,
+                        f'{route.distance_km:,.0f}km', route.num_legs, n_ac,
                         f'{route.weekly_pax:,}', f'${route.ticket_price:.0f}',
                         rev_str, status),
                 tags=(tag,))
@@ -492,20 +765,21 @@ class RoutesPanel(tk.Frame):
         self._ac_tree.tag_configure('gate', foreground=TEXT2)
 
     def _open_route(self):
-        orig = self._orig_var.get().strip().upper()
-        dest = self._dest_var.get().strip().upper()
-        if not orig or not dest:
-            messagebox.showwarning('Missing Fields', 'Select both origin and destination.', parent=self)
+        stops = [sv.get().strip().upper() for sv in self._stop_vars]
+        stops = [s for s in stops if s]
+        if len(stops) < 2:
+            messagebox.showwarning('Missing Fields',
+                                   'Select at least an origin and destination.', parent=self)
             return
-        ok, msg = self.engine.open_route(orig, dest)
+        ok, msg = self.engine.open_route(stops)
         if ok:
             if self.on_map_refresh:
                 self.on_map_refresh()
             if self.refresh_cb:
                 self.refresh_cb()
             self.refresh()
-            self._orig_var.set('')
-            self._dest_var.set('')
+            self._stop_vars = [tk.StringVar(), tk.StringVar()]
+            self._render_stops()
         else:
             messagebox.showerror('Cannot Open Route', msg, parent=self)
 
@@ -543,10 +817,12 @@ class RoutesPanel(tk.Frame):
         dlg.configure(bg=BG2)
         dlg.transient(self.winfo_toplevel())
 
+        stops_str = '→'.join(route.stops)
         tk.Label(dlg,
-            text=f'Set ticket price for {rid}\n'
-                 f'Current: ${route.ticket_price:.0f}  ·  Distance: {route.distance_km:.0f} km\n'
-                 f'Lower prices attract more passengers.',
+            text=f'Set ticket price for {stops_str}\n'
+                 f'Current: ${route.ticket_price:.0f}  ·  Total distance: {route.distance_km:.0f} km'
+                 f'  ({route.num_legs} leg{"s" if route.num_legs > 1 else ""})\n'
+                 f'Price is scaled per leg by distance. Lower prices attract more passengers.',
             fg=TEXT, bg=BG2, font=F_SMALL, justify='left').pack(padx=12, pady=(10, 6))
 
         entry_var = tk.StringVar(value=str(int(route.ticket_price)))
@@ -788,5 +1064,252 @@ class EventsPanel(tk.Frame):
             self._text.insert('end', entry + '\n', tag)
         self._text.config(state='disabled')
         self._text.see('1.0')
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESEARCH PANEL
+# ─────────────────────────────────────────────────────────────────────────────
+class ResearchPanel(tk.Frame):
+    def __init__(self, parent, state, engine: GameEngine, refresh_cb=None, **kw):
+        super().__init__(parent, bg=BG2, **kw)
+        self.state = state
+        self.engine = engine
+        self.refresh_cb = refresh_cb
+        self._selected_proj_id = None
+        self._build()
+
+    def _build(self):
+        tk.Label(self, text='RESEARCH & INNOVATION', fg=GOLD, bg=BG2,
+                 font=F_SUBHEAD).pack(anchor='w', padx=12, pady=(10, 2))
+
+        # Active research progress bar
+        self._progress_frame = tk.Frame(self, bg=BG3)
+        self._progress_frame.pack(fill='x', padx=8, pady=4)
+        self._progress_lbl = tk.Label(self._progress_frame, text='No active research',
+                                       fg=TEXT2, bg=BG3, font=F_SMALL)
+        self._progress_lbl.pack(anchor='w', padx=10, pady=(6, 2))
+        self._progress_bar = tk.Canvas(self._progress_frame, bg=BG3,
+                                        height=14, highlightthickness=0)
+        self._progress_bar.pack(fill='x', padx=10, pady=(0, 6))
+
+        # Main content: list + detail
+        content = tk.Frame(self, bg=BG2)
+        content.pack(fill='both', expand=True, padx=8, pady=4)
+
+        # Left: project list
+        list_frame = tk.Frame(content, bg=BG2)
+        list_frame.pack(side='left', fill='both', expand=True)
+
+        tk.Label(list_frame, text='AVAILABLE PROJECTS', fg=GOLD, bg=BG2,
+                 font=F_SMALL).pack(anchor='w', padx=4, pady=(0, 2))
+
+        cols = ('status', 'name', 'cost', 'duration', 'era')
+        self._proj_tree = ttk.Treeview(list_frame, columns=cols, show='headings',
+                                        selectmode='browse', style='Treeview')
+        hdrs = [('status', '', 30), ('name', 'Project', 210),
+                ('cost', 'Cost', 80), ('duration', 'Duration', 80), ('era', 'Era', 60)]
+        for col, hdr, w in hdrs:
+            self._proj_tree.heading(col, text=hdr)
+            self._proj_tree.column(col, width=w, anchor='center')
+        self._proj_tree.column('name', anchor='w')
+        self._proj_tree.bind('<<TreeviewSelect>>', self._on_proj_select)
+
+        sb = ttk.Scrollbar(list_frame, orient='vertical', command=self._proj_tree.yview)
+        self._proj_tree.configure(yscrollcommand=sb.set)
+        self._proj_tree.pack(side='left', fill='both', expand=True, pady=2)
+        sb.pack(side='left', fill='y', pady=2)
+
+        # Right: detail card
+        detail_frame = tk.Frame(content, bg=BG3, width=260)
+        detail_frame.pack(side='right', fill='y', padx=(8, 0))
+        detail_frame.pack_propagate(False)
+
+        self._detail_lbl = tk.Label(detail_frame,
+                                     text='Select a project\nto view details',
+                                     fg=TEXT2, bg=BG3, font=F_SMALL,
+                                     justify='left', wraplength=240)
+        self._detail_lbl.pack(padx=10, pady=10, anchor='nw')
+
+        btn_area = tk.Frame(detail_frame, bg=BG3)
+        btn_area.pack(fill='x', padx=10, pady=4, side='bottom')
+
+        self._start_btn = icon_btn(btn_area, '🔬  Start Research', self._start_research,
+                                    color=ACCENT, font=F_SMALL)
+        self._start_btn.pack(fill='x', pady=2)
+        self._start_btn.config(state='disabled')
+
+        self._cancel_btn = icon_btn(btn_area, '✖  Cancel Research', self._cancel_research,
+                                     color='#5a1a1a', font=F_SMALL)
+        self._cancel_btn.pack(fill='x', pady=2)
+        self._cancel_btn.config(state='disabled')
+
+        self.refresh()
+
+    def refresh(self):
+        s = self.state
+        self._populate_projects()
+        self._update_progress()
+
+    def _populate_projects(self):
+        sel = self._proj_tree.selection()
+        for item in self._proj_tree.get_children():
+            self._proj_tree.delete(item)
+
+        for proj in RESEARCH_PROJECTS:
+            completed = proj.id in self.state.completed_research
+            active = proj.id == self.state.active_research
+            era_ok = proj.era_min <= self.state.year
+            prereq_ok = (not proj.prerequisite or
+                         proj.prerequisite in self.state.completed_research)
+
+            if completed:
+                status_icon = '✓'
+                tag = 'done'
+            elif active:
+                status_icon = '▶'
+                tag = 'active'
+            elif not era_ok or not prereq_ok:
+                status_icon = '🔒'
+                tag = 'locked'
+            else:
+                status_icon = '○'
+                tag = 'avail'
+
+            cost_str = f'${proj.cost_m:.0f}M'
+            dur_str = f'{proj.duration_days}d'
+            era_str = str(proj.era_min)
+
+            self._proj_tree.insert('', 'end', iid=proj.id,
+                values=(status_icon, proj.name, cost_str, dur_str, era_str),
+                tags=(tag,))
+
+        self._proj_tree.tag_configure('done',   foreground=MUTED)
+        self._proj_tree.tag_configure('active', foreground=ACCENT2)
+        self._proj_tree.tag_configure('locked', foreground=MUTED)
+        self._proj_tree.tag_configure('avail',  foreground=TEXT)
+
+        for iid in sel:
+            if self._proj_tree.exists(iid):
+                self._proj_tree.selection_set(iid)
+
+    def _update_progress(self):
+        s = self.state
+        bar = self._progress_bar
+        bar.delete('all')
+
+        if not s.active_research:
+            self._progress_lbl.config(text='No active research  —  select a project and click Start',
+                                       fg=TEXT2)
+            self._cancel_btn.config(state='disabled')
+            return
+
+        proj = next((p for p in RESEARCH_PROJECTS if p.id == s.active_research), None)
+        if not proj:
+            return
+
+        pct = min(1.0, s.research_progress_days / max(1, proj.duration_days))
+        days_left = max(0, proj.duration_days - s.research_progress_days)
+        self._progress_lbl.config(
+            text=f'▶  {proj.name}  —  {pct*100:.0f}%  ({days_left:.0f} days remaining)',
+            fg=ACCENT2)
+        self._cancel_btn.config(state='normal')
+
+        # Draw progress bar
+        bar.update_idletasks()
+        w = bar.winfo_width() or 400
+        fill_w = int(w * pct)
+        bar.create_rectangle(0, 0, w, 14, fill=BG3, outline='')
+        if fill_w > 0:
+            bar.create_rectangle(0, 0, fill_w, 14, fill=ACCENT, outline='')
+        bar.create_text(w // 2, 7, text=f'{pct*100:.0f}%',
+                        fill=WHITE, font=F_SMALL)
+
+    def _on_proj_select(self, event):
+        sel = self._proj_tree.selection()
+        if not sel:
+            return
+        proj_id = sel[0]
+        self._selected_proj_id = proj_id
+        proj = next((p for p in RESEARCH_PROJECTS if p.id == proj_id), None)
+        if not proj:
+            return
+
+        s = self.state
+        completed = proj_id in s.completed_research
+        active = proj_id == s.active_research
+        era_ok = proj.era_min <= s.year
+        prereq_ok = not proj.prerequisite or proj.prerequisite in s.completed_research
+        cost = int(proj.cost_m * 1_000_000)
+        affordable = cost <= s.cash
+
+        if completed:
+            state_txt = '✅ Completed'
+            state_col = GREEN
+        elif active:
+            pct = min(100.0, s.research_progress_days / max(1, proj.duration_days) * 100)
+            state_txt = f'▶ In Progress ({pct:.0f}%)'
+            state_col = ACCENT2
+        elif not era_ok:
+            state_txt = f'🔒 Available from {proj.era_min}'
+            state_col = MUTED
+        elif not prereq_ok:
+            prereq = next((p for p in RESEARCH_PROJECTS if p.id == proj.prerequisite), None)
+            state_txt = f'🔒 Requires: {prereq.name if prereq else proj.prerequisite}'
+            state_col = MUTED
+        elif not affordable:
+            state_txt = f'💸 Insufficient funds (need ${cost:,})'
+            state_col = RED
+        else:
+            state_txt = '○ Available'
+            state_col = TEXT
+
+        sep = '─' * 30
+        prereq_line = ''
+        if proj.prerequisite:
+            prereq = next((p for p in RESEARCH_PROJECTS if p.id == proj.prerequisite), None)
+            prereq_status = '✓' if proj.prerequisite in s.completed_research else '✗'
+            prereq_line = f'\nRequires: {prereq.name if prereq else proj.prerequisite} {prereq_status}'
+
+        detail = (
+            f'🔬 {proj.name}\n'
+            f'{sep}\n\n'
+            f'{proj.description}\n\n'
+            f'💰  Cost: ${proj.cost_m:.0f}M\n'
+            f'⏱  Duration: {proj.duration_days} days\n'
+            f'📅  Available: {proj.era_min}+\n'
+            f'{prereq_line}\n'
+            f'{sep}\n'
+            f'📈  Effect:\n{proj.effect_desc}\n\n'
+            f'Status: {state_txt}'
+        )
+        self._detail_lbl.config(text=detail, fg=state_col if completed or not era_ok else TEXT)
+
+        can_start = (not completed and not active and era_ok and
+                     prereq_ok and affordable and not s.active_research)
+        self._start_btn.config(state='normal' if can_start else 'disabled')
+
+    def _start_research(self):
+        if not self._selected_proj_id:
+            return
+        ok, msg = self.engine.start_research(self._selected_proj_id)
+        if ok:
+            if self.refresh_cb:
+                self.refresh_cb()
+            self.refresh()
+        else:
+            messagebox.showerror('Cannot Start Research', msg, parent=self)
+
+    def _cancel_research(self):
+        if not messagebox.askyesno(
+                'Cancel Research',
+                'Cancel current research?\n50% of the cost will be refunded.',
+                parent=self):
+            return
+        ok, msg = self.engine.cancel_research()
+        if ok:
+            messagebox.showinfo('Research Cancelled', msg, parent=self)
+            if self.refresh_cb:
+                self.refresh_cb()
+            self.refresh()
+
 
 _SANS = 'Helvetica'

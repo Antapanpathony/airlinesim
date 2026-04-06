@@ -207,34 +207,63 @@ class WorldMap(tk.Canvas):
             pts.extend([cx_, cy_])
         return pts
 
+    def _arc_segments(self, pts: List[float]) -> List[List[float]]:
+        """Split a flat [x,y,...] arc into segments at antimeridian wrap-arounds.
+
+        When a great-circle arc crosses ±180° longitude the canvas x-coordinate
+        jumps from one edge of the map to the other.  Drawing a single
+        create_line across that gap produces the green/blue streak across the
+        whole screen.  We detect the jump and return separate sub-lists so each
+        segment can be drawn independently.
+        """
+        if len(pts) < 4:
+            return [pts] if len(pts) >= 4 else []
+        w = self.winfo_width() or 800
+        threshold = w * 0.35          # jump larger than 35 % of map width = wrap
+        segments: List[List[float]] = []
+        current: List[float] = [pts[0], pts[1]]
+        for i in range(2, len(pts), 2):
+            x, y = pts[i], pts[i + 1]
+            if abs(x - current[-2]) > threshold:
+                if len(current) >= 4:
+                    segments.append(current)
+                current = [x, y]
+            else:
+                current.extend([x, y])
+        if len(current) >= 4:
+            segments.append(current)
+        return segments
+
     def _draw_routes(self):
         if not self.game_state:
             return
         for route in self.game_state.routes:
-            c1 = CITY_DICT.get(route.origin)
-            c2 = CITY_DICT.get(route.dest)
-            if not c1 or not c2:
-                continue
-            pts = self._great_circle_arc(c1.lat, c1.lon, c2.lat, c2.lon, steps=30)
             active = bool(route.aircraft_ids)
             color = ROUTE_A if active else ROUTE_C
             width = 2 if active else 1
             dash = None if active else (6, 4)
-
             items = []
-            if pts and len(pts) >= 4:
-                kw = dict(fill=color, width=width, smooth=True, joinstyle='round',
-                          capstyle='round')
+            for i in range(route.num_legs):
+                c1 = CITY_DICT.get(route.stops[i])
+                c2 = CITY_DICT.get(route.stops[i + 1])
+                if not c1 or not c2:
+                    continue
+                pts = self._great_circle_arc(c1.lat, c1.lon, c2.lat, c2.lon, steps=30)
+                if not pts or len(pts) < 4:
+                    continue
+                kw = dict(fill=color, width=width, smooth=True,
+                          joinstyle='round', capstyle='round')
                 if dash:
                     kw['dash'] = dash
-                item = self.create_line(*pts, **kw)
-                items.append(item)
-
-                # Arrow mid-point
-                mid = len(pts) // 2
-                if mid + 2 < len(pts):
-                    mx, my = pts[mid], pts[mid+1]
-                    mx2, my2 = pts[mid+2], pts[mid+3]
+                # Split at antimeridian to avoid a line streaking across the screen
+                for seg in self._arc_segments(pts):
+                    items.append(self.create_line(*seg, **kw))
+                # Arrow on the longest segment's midpoint
+                best = max(self._arc_segments(pts), key=len, default=[])
+                mid = len(best) // 2
+                if mid + 2 < len(best):
+                    mx, my = best[mid], best[mid+1]
+                    mx2, my2 = best[mid+2], best[mid+3]
                     angle = math.atan2(my2 - my, mx2 - mx)
                     sz = 7
                     arrow_pts = [
@@ -242,9 +271,7 @@ class WorldMap(tk.Canvas):
                         mx + sz*math.cos(angle+2.5), my + sz*math.sin(angle+2.5),
                         mx + sz*math.cos(angle-2.5), my + sz*math.sin(angle-2.5),
                     ]
-                    a = self.create_polygon(arrow_pts, fill=color, outline='')
-                    items.append(a)
-
+                    items.append(self.create_polygon(arrow_pts, fill=color, outline=''))
             self._route_items[route.id] = items
 
     def _draw_cities(self):
@@ -253,8 +280,8 @@ class WorldMap(tk.Canvas):
         route_cities = set()
         if self.game_state:
             for r in self.game_state.routes:
-                route_cities.add(r.origin)
-                route_cities.add(r.dest)
+                for stop in r.stops:
+                    route_cities.add(stop)
 
         for city in CITIES:
             cx_, cy_ = self._ll_to_canvas(city.lat, city.lon)
@@ -338,8 +365,10 @@ class WorldMap(tk.Canvas):
             route = self.game_state.get_route(flight.route_id)
             if not route:
                 continue
-            c1 = CITY_DICT.get(route.origin)
-            c2 = CITY_DICT.get(route.dest)
+            leg_idx = getattr(flight, 'leg_index', 0)
+            from_code, to_code = route.leg_pair(leg_idx, flight.going)
+            c1 = CITY_DICT.get(from_code)
+            c2 = CITY_DICT.get(to_code)
             if not c1 or not c2:
                 continue
             total = flight.arrive_day - flight.depart_day
@@ -347,9 +376,6 @@ class WorldMap(tk.Canvas):
                 continue
             progress = (self.game_state.game_day - flight.depart_day) / total
             progress = max(0.0, min(1.0, progress))
-            # going=True: origin→dest; going=False: dest→origin
-            if not flight.going:
-                progress = 1.0 - progress
             lat, lon = self._interpolate_gc(c1.lat, c1.lon, c2.lat, c2.lon, progress)
             cx_, cy_ = self._ll_to_canvas(lat, lon)
             r = 4

@@ -21,7 +21,7 @@ from data import CITIES, CITY_DICT, get_aircraft
 from ui_theme import money_str, pax_str
 from engine import GameState, GameEngine, ActiveFlight, FinancialRecord, OwnedAircraft, Route, new_game
 from map_widget import WorldMap
-from panels import FleetPanel, RoutesPanel, FinancePanel, EventsPanel
+from panels import FleetPanel, RoutesPanel, FinancePanel, EventsPanel, ResearchPanel
 
 SAVE_FILE = os.path.join(os.path.dirname(__file__), 'save.json')
 APP_TITLE = 'Airline Empire  ·  1900 – 2050'
@@ -193,13 +193,18 @@ class SetupScreen(tk.Frame):
         yr_frame = lambda p: self._make_year_frame(p)
         row('Starting Year:', yr_frame, 1)
 
-        # Hub city
-        self._hub_var = tk.StringVar(value='JFK')
-        city_values = [f'{c.code} — {c.name}, {c.country}' for c in CITIES]
+        # Hub city — show full names, store full string, extract code on start
+        _hub_choices = sorted(
+            [f'{c.code} — {c.name}, {c.country}' for c in CITIES]
+        )
+        _default_hub = next(
+            (s for s in _hub_choices if s.startswith('JFK')), _hub_choices[0]
+        )
+        self._hub_var = tk.StringVar(value=_default_hub)
         hub_cb = lambda p: ttk.Combobox(p, textvariable=self._hub_var,
-                                         values=[c.code for c in CITIES],
-                                         state='readonly', width=20,
-                                         font=('Helvetica',11))
+                                         values=_hub_choices,
+                                         state='readonly', width=32,
+                                         font=('Helvetica', 10))
         row('Hub Airport:', hub_cb, 2)
 
         # Difficulty
@@ -254,7 +259,9 @@ class SetupScreen(tk.Frame):
         if not name:
             messagebox.showwarning('Missing Name', 'Please enter an airline name.', parent=self)
             return
-        self.on_start(name, self._hub_var.get(), self._year_var.get(), self._diff_var.get())
+        hub_str = self._hub_var.get()
+        hub_code = hub_str.split(' — ')[0].strip() if ' — ' in hub_str else hub_str[:3].upper()
+        self.on_start(name, hub_code, self._year_var.get(), self._diff_var.get())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -385,11 +392,12 @@ class GameScreen(tk.Frame):
         tk.Label(sb, text='', bg=BG2, height=1).pack()
 
         nav_items = [
-            ('map',     '🗺',  'Map'),
-            ('fleet',   '✈',   'Fleet'),
-            ('routes',  '↔',   'Routes'),
-            ('finance', '💰',  'Finance'),
-            ('events',  '📰',  'News'),
+            ('map',      '🗺',  'Map'),
+            ('fleet',    '✈',   'Fleet'),
+            ('routes',   '↔',   'Routes'),
+            ('finance',  '💰',  'Finance'),
+            ('research', '🔬',  'Research'),
+            ('events',   '📰',  'News'),
         ]
         self._nav_btns = {}
         for tab_id, icon, label in nav_items:
@@ -451,17 +459,127 @@ class GameScreen(tk.Frame):
         finance_panel = FinancePanel(cont, self.state)
         self._panels['finance'] = finance_panel
 
+        # Research panel
+        research_panel = ResearchPanel(cont, self.state, self.engine,
+                                        refresh_cb=self.refresh_all)
+        self._panels['research'] = research_panel
+
         # Events panel
         events_panel = EventsPanel(cont, self.state)
         self._panels['events'] = events_panel
 
     def _on_map_city_click(self, city):
-        """When user clicks a city on the map, fill route fields."""
-        # Switch to routes tab and set city
-        self._show_tab('routes')
-        routes_panel = self._panels.get('routes')
-        if routes_panel and hasattr(routes_panel, 'set_city'):
-            routes_panel.set_city(city.code)
+        """When user clicks a city on the map, show airport demand popup."""
+        self._show_airport_popup(city)
+
+    def _show_airport_popup(self, city):
+        from ui_theme import BG2, BG3, GOLD, TEXT, TEXT2, MUTED, ACCENT, ACCENT2, GREEN, ORANGE, RED
+        from ui_theme import F_SUBHEAD, F_SMALL, F_BODY, icon_btn, money_str
+
+        popup = tk.Toplevel(self)
+        popup.withdraw()
+        popup.title(f'{city.name} Airport Demand')
+        popup.configure(bg=BG2)
+        popup.transient(self)
+        popup.resizable(True, True)
+
+        _tier_names = {1: 'Mega Hub ★★★', 2: 'Major Hub ★★', 3: 'Regional ★'}
+        tier_str = _tier_names.get(city.hub_tier, '—')
+        tk.Label(popup,
+                 text=f'✈  {city.name}, {city.country}  ({city.code})',
+                 fg=GOLD, bg=BG2, font=F_SUBHEAD).pack(padx=16, pady=(12, 2))
+        tk.Label(popup,
+                 text=f'{tier_str}  ·  Population: {city.population_m:.1f}M',
+                 fg=TEXT2, bg=BG2, font=F_SMALL).pack(padx=16, pady=(0, 6))
+
+        from tkinter import ttk
+        frm = tk.Frame(popup, bg=BG2)
+        frm.pack(fill='both', expand=True, padx=12, pady=4)
+
+        cols = ('dest', 'dist', 'demand', 'budget_demand', 'status')
+        tree = ttk.Treeview(frm, columns=cols, show='headings',
+                             selectmode='browse', style='Treeview', height=14)
+        hdrs = [('dest', 'Destination', 160), ('dist', 'Distance', 80),
+                ('demand', 'Daily Demand', 90), ('budget_demand', 'Budget Demand', 100),
+                ('status', 'Route', 70)]
+        for col, hdr, w in hdrs:
+            tree.heading(col, text=hdr)
+            tree.column(col, width=w, anchor='center')
+        tree.column('dest', anchor='w')
+
+        demand_data = self.engine.airport_demand_info(city.code)
+        for info in demand_data:
+            budget_d = info['daily_demand'] * 5
+            status = '✅ Open' if info['has_route'] else '—'
+            tag = 'open' if info['has_route'] else 'none'
+            tree.insert('', 'end',
+                values=(info['dest_name'], f"{info['dist_km']:.0f}km",
+                        f"{info['daily_demand']:,}", f"{budget_d:,}", status),
+                tags=(tag,))
+        tree.tag_configure('open', foreground=ACCENT2)
+        tree.tag_configure('none', foreground=TEXT2)
+
+        sb = ttk.Scrollbar(frm, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+
+        tk.Label(popup,
+                 text='💛 Budget Demand = 5× regular demand at ½ ticket price (requires Budget Subsidiary research)',
+                 fg=MUTED, bg=BG2, font=F_SMALL, wraplength=520).pack(padx=12, pady=(4, 2))
+
+        status_lbl = tk.Label(popup, text='Click a destination to open a route from here.',
+                              fg=TEXT2, bg=BG2, font=F_SMALL)
+        status_lbl.pack(pady=(2, 0))
+
+        def _dest_code_for_row(iid):
+            item = tree.item(iid)
+            dest_name = item['values'][0]
+            for d in demand_data:
+                if d['dest_name'] == dest_name:
+                    return d['dest']
+            return None
+
+        def _on_row_click(event):
+            row = tree.identify_row(event.y)
+            if not row:
+                return
+            tree.selection_set(row)
+            dest = _dest_code_for_row(row)
+            if not dest:
+                return
+            ok, msg = self.engine.open_route([city.code, dest])
+            if ok:
+                status_lbl.config(
+                    text=f'✅ Opened {city.code}→{dest}. Close this and assign aircraft.',
+                    fg=GREEN)
+                # Refresh the status column so the row shows "✅ Open"
+                for iid in tree.get_children():
+                    d_code = _dest_code_for_row(iid)
+                    if d_code == dest:
+                        vals = list(tree.item(iid, 'values'))
+                        vals[-1] = '✅ Open'
+                        tree.item(iid, values=vals, tags=('open',))
+                self._refresh_map()
+                rp = self._panels.get('routes')
+                if rp:
+                    rp.refresh()
+            else:
+                status_lbl.config(text=f'⚠ {msg}', fg=ORANGE)
+
+        tree.bind('<ButtonRelease-1>', _on_row_click)
+
+        btn_row = tk.Frame(popup, bg=BG2)
+        btn_row.pack(pady=(4, 8))
+        icon_btn(btn_row, 'Close', popup.destroy,
+                 color='#3a3a3a', font=F_SMALL).pack()
+
+        popup.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - popup.winfo_reqwidth()) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - popup.winfo_reqheight()) // 2
+        popup.geometry(f'580x460+{x}+{y}')
+        popup.deiconify()
+        popup.grab_set()
 
     def _refresh_map(self):
         self._map_widget.redraw()
@@ -601,7 +719,6 @@ class GameScreen(tk.Frame):
         popup.configure(bg=BG2)
         popup.geometry('520x300')
         popup.transient(self)
-        popup.grab_set()
 
         tk.Label(popup, text='📰  BREAKING NEWS', fg=GOLD, bg=BG2,
                  font=('Helvetica', 16, 'bold')).pack(pady=(20, 10))
@@ -619,6 +736,8 @@ class GameScreen(tk.Frame):
         tk.Button(popup, text='Continue', command=on_continue,
                   bg=ACCENT, fg=WHITE, font=('Helvetica', 11, 'bold'),
                   relief='flat', padx=20, pady=6, cursor='hand2').pack(pady=16)
+        popup.update_idletasks()
+        popup.grab_set()
         self.wait_window(popup)
 
     # ── Refresh ───────────────────────────────────────────────────────────────
@@ -720,6 +839,11 @@ class App(tk.Tk):
             data.setdefault('game_day', 0.0)
             data.setdefault('_period_revenue', 0.0)
             data.setdefault('_period_costs', 0.0)
+            # Migrate: research system
+            data.setdefault('completed_research', [])
+            data.setdefault('active_research', None)
+            data.setdefault('research_progress_days', 0.0)
+            data.setdefault('difficulty', 'normal')
 
             # Migrate old saves: detect millions-based cash (< 10_000) → convert to dollars
             old_format = data.get('cash', 0) < 10_000
@@ -731,11 +855,31 @@ class App(tk.Tk):
                 data['_period_costs'] = data.get('_period_costs', 0) * 1_000_000
 
             # Rebuild nested dataclasses
+            # Migrate fleet: add cabin_config if missing
+            for ac_data in data.get('fleet', []):
+                if 'cabin_config' not in ac_data:
+                    ac_info = get_aircraft(ac_data.get('ac_id', ''))
+                    pax = ac_info.passengers if ac_info else 100
+                    ac_data['cabin_config'] = {'economy': pax}
             fleet = [OwnedAircraft(**o) for o in data.get('fleet', [])]
-            # Migrate routes: add last_revenue default if missing
+            # Migrate routes
             raw_routes = data.get('routes', [])
             for r in raw_routes:
+                # Old format had origin/dest/distance_km; new format uses stops/leg_distances
+                if 'origin' in r and 'stops' not in r:
+                    origin = r.pop('origin')
+                    dest = r.pop('dest')
+                    dist = r.pop('distance_km', 0.0)
+                    r['stops'] = [origin, dest]
+                    r['leg_distances'] = [dist]
                 r.setdefault('last_revenue', 0.0)
+                # Migrate scalar demand_pool to list
+                dp = r.get('demand_pool', [])
+                if isinstance(dp, (int, float)):
+                    r['demand_pool'] = [float(dp)]
+                dpb = r.get('demand_pool_budget', [])
+                if isinstance(dpb, (int, float)):
+                    r['demand_pool_budget'] = [float(dpb)]
             routes = [Route(**r) for r in raw_routes]
 
             raw_flights = data.get('active_flights', [])
@@ -744,6 +888,7 @@ class App(tk.Tk):
                 if 'revenue_m' in f:
                     f['revenue'] = f.pop('revenue_m') * 1_000_000
                 f.setdefault('revenue', 0.0)
+                f.setdefault('leg_index', 0)
             active_flights = [ActiveFlight(**f) for f in raw_flights]
 
             history = []
